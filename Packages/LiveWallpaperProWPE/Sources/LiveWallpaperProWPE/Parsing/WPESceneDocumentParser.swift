@@ -354,6 +354,7 @@ public enum WPESceneDocumentParser {
                    transform: transform,
                    localOrigin: localTransform(in: entry, scriptOrigins: scriptResolvedOrigins).origin,
                    localScale: localTransform(in: entry, scriptOrigins: scriptResolvedOrigins).scale,
+                   localAngles: localTransform(in: entry, scriptOrigins: scriptResolvedOrigins).angles,
                    parentObjectID: entryID.flatMap { objectParentByID[$0] },
                    effectiveVisible: effectiveVisible,
                    diagnostics: &diagnostics
@@ -821,6 +822,14 @@ public enum WPESceneDocumentParser {
                 append(raw: object["visible"], target: .particleObject(id: objectID), kind: .visible, action: .reload)
                 append(raw: object["color"], target: .particleObject(id: objectID), kind: .color, action: .reload)
                 append(raw: object["alpha"], target: .particleObject(id: objectID), kind: .alpha, action: .reload)
+                // No live consumer for rate-script properties: a key also bound incrementally elsewhere would otherwise skip the reload.
+                let instanceOverride = (object["instanceoverride"] ?? object["instanceOverride"]) as? [String: Any]
+                append(
+                    raw: (instanceOverride?["rate"] as? [String: Any])?["scriptproperties"],
+                    target: .particleObject(id: objectID),
+                    kind: .scriptProperty,
+                    action: .reload
+                )
             case .sound:
                 append(raw: object["visible"], target: .soundObject(id: objectID), kind: .visible, action: .incremental)
                 append(raw: object["volume"], target: .soundObject(id: objectID), kind: .volume, action: .incremental)
@@ -1190,6 +1199,7 @@ public enum WPESceneDocumentParser {
         transform: SceneObjectTransform,
         localOrigin: SIMD3<Double>? = nil,
         localScale: SIMD3<Double>? = nil,
+        localAngles: SIMD3<Double>? = nil,
         parentObjectID: String? = nil,
         effectiveVisible: Bool? = nil,
         diagnostics: inout [WPESceneDiagnostic]
@@ -1310,6 +1320,7 @@ public enum WPESceneDocumentParser {
             parentObjectID: parentObjectID,
             localOrigin: localOrigin,
             localScale: localScale,
+            localAngles: localAngles,
             alphaScript: alphaScript,
             alphaScriptProperties: alphaScriptProperties,
             visibleScript: visibleScript,

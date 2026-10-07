@@ -25,6 +25,20 @@ struct NavigationTests {
         #expect(!items.map(\.destination).contains(.general))
     }
 
+    @Test("Appearance terms land on the Appearance page; language stays on General")
+    func appearanceAndLanguageLandOnTheirOwnPages() {
+        let cases: [(query: String, destination: SettingsNavigation, anchor: SettingsSearchAnchor)] = [
+            ("dark", .appearance, .appearanceWindow),
+            ("shelf style", .appearance, .appearanceLibrary),
+            ("language", .general, .generalLanguage),
+        ]
+        for (query, destination, anchor) in cases {
+            let result = SettingsNavigation.filteredResults(matching: query, capabilities: .pro)
+                .first { $0.destination == destination }
+            #expect(result?.anchor == anchor, "`\(query)` lands on \(String(describing: result?.anchor)) of \(destination)")
+        }
+    }
+
     @Test("Settings navigation stays scoped to settings tasks")
     func settingsNavigationStaysScopedToSettingsTasks() {
         let titles = SettingsNavigation.availableItems(
@@ -284,5 +298,22 @@ struct NavigationTests {
         )
 
         #expect(results.first { $0.destination == .storage }?.anchor == .storageDashboard)
+    }
+
+    @Test("Translate wallpaper text is found under Language in Pro, and not in Lite")
+    func translateWallpaperTextIsSearchableInProOnly() throws {
+        guard #available(macOS 15.0, *) else { return }
+        let general = try #require(SettingsNavigation.allItems.first { $0.destination == .general })
+
+        let pro = SettingsNavigation.filteredResults(matching: "translate", capabilities: .pro)
+            .first { $0.destination == .general }
+        #expect(pro?.anchor == .generalLanguage)
+        let focus = general.searchFocus(matching: "translate", capabilities: .pro)
+        #expect(focus?.rows.contains("Translate wallpaper text") == true)
+
+        let lite = SettingsNavigation.filteredResults(matching: "translate", capabilities: .lite)
+            .first { $0.destination == .general }
+        #expect(lite?.anchor != .generalLanguage)
+        #expect(general.searchFocus(matching: "translate", capabilities: .lite)?.rows.contains("Translate wallpaper text") != true)
     }
 }

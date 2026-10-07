@@ -47,18 +47,25 @@ struct AppStorageMeasurement: Sendable, Identifiable {
     }
 }
 
+/// `path` is `root` or lies beneath it; `root` may already end in "/" (the volume root).
+func storagePath(_ path: String, isWithin root: String) -> Bool {
+    path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
+}
+
 actor AppStorageScanner {
     static let shared = AppStorageScanner()
     private let fileManager = FileManager()
 
     func scan(_ locations: [AppStorageLocation], excluding externalRoots: [URL] = [], budget: Int = 200_000) -> [AppStorageMeasurement] {
-        locations.map { location in
-            let exclusions = locations.filter { $0.id != location.id }.map(\.url) + externalRoots
+        let roots = locations.map { (id: $0.id, path: $0.url.standardizedFileURL.path) }
+        let externalPaths = Set(externalRoots.map(\.standardizedFileURL.path))
+        return locations.map { location in
+            let exclusions = Set(roots.lazy.filter { $0.id != location.id }.map(\.path)).union(externalPaths)
             return measure(location, excluding: exclusions, budget: budget)
         }
     }
 
-    private func measure(_ location: AppStorageLocation, excluding exclusions: [URL], budget: Int) -> AppStorageMeasurement {
+    private func measure(_ location: AppStorageLocation, excluding exclusions: Set<String>, budget: Int) -> AppStorageMeasurement {
         var bytes: UInt64 = 0
         var count = 0
         var status: AppStorageMeasurement.Status = .complete
@@ -68,7 +75,7 @@ actor AppStorageScanner {
             AppStorageMeasurement(location: location, bytes: bytes, fileCount: count, status: status)
         }
         let root = location.url.standardizedFileURL
-        if exclusions.contains(where: { $0.standardizedFileURL == root }) {
+        if exclusions.contains(root.path) {
             return result()
         }
         let rootValues: URLResourceValues
@@ -87,8 +94,7 @@ actor AppStorageScanner {
             return result()
         }
         guard rootValues.isDirectory == true else { status = .unavailable; return result() }
-        let excludedPaths = exclusions.map(\.standardizedFileURL.path)
-            .filter { $0.hasPrefix(root.path + "/") }
+        let excludedPaths = exclusions.filter { storagePath($0, isWithin: root.path) }
         guard let enumerator = fileManager.enumerator(
             at: root, includingPropertiesForKeys: Array(keys), options: [],
             errorHandler: { _, _ in status = .partial; return true }
@@ -122,7 +128,6 @@ extension AppStorageLocation {
         let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let caches = fm.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         let library = support.deletingLastPathComponent()
-        let bundleID = Bundle.main.bundleIdentifier ?? "com.loomscreen.pro"
         let configuration = ConfigurationDirectory().root
         let legacy = support.appendingPathComponent("LiveWallpaper", isDirectory: true)
         let realSupport = SystemWallpaperPaths.realHomeDirectory.appendingPathComponent("Library/Application Support/Loomscreen", isDirectory: true)

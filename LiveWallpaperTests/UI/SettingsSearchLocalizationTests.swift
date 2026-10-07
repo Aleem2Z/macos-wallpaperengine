@@ -104,20 +104,20 @@ struct SettingsSearchLocalizationTests {
         for style in ["Facing In", "Crate", "Folders", "Fan", "Focus Row"] {
             let query = style.localized(in: bundle)
             let anchor = SettingsNavigation.filteredResults(matching: query, capabilities: .pro)
-                .first { $0.destination == .general }?.anchor
+                .first { $0.destination == .appearance }?.anchor
             #expect(
-                anchor == .generalAppearance,
+                anchor == .appearanceLibrary,
                 Comment(rawValue: "\(language): `\(query)` (\(style)) lands on \(anchor?.rawValue ?? "nothing")")
             )
         }
     }
 
-    @Test("A retired shelf style name no longer reaches General")
+    @Test("A retired shelf style name no longer reaches Appearance")
     func retiredShelfStyleNamesAreNotIndexed() {
         for query in ["cover flow", "封面流"] {
-            let reachesGeneral = SettingsNavigation.filteredResults(matching: query, capabilities: .pro)
-                .contains { $0.destination == .general }
-            #expect(!reachesGeneral, Comment(rawValue: "`\(query)` still reaches General"))
+            let reachesAppearance = SettingsNavigation.filteredResults(matching: query, capabilities: .pro)
+                .contains { $0.destination == .appearance }
+            #expect(!reachesAppearance, Comment(rawValue: "`\(query)` still reaches Appearance"))
         }
     }
 
@@ -132,7 +132,7 @@ struct SettingsSearchLocalizationTests {
         for file in RepositoryRoot.swiftFiles(under: "LiveWallpaper/Views/Settings") {
             let source = try String(contentsOf: file, encoding: .utf8)
             titles += try Self.captures(Self.settingRowTitle, in: source).flatMap { try Self.captures(Self.literal, in: $0) }
-            titles += try Self.captures(Self.tileTitle, in: source) + Self.captures(Self.sectionHeader, in: source)
+            titles += try Self.captures(Self.sectionHeader, in: source)
         }
         #expect(titles.count > 60, Comment(rawValue: "The scan found \(titles.count) titles; its patterns or directory drifted"))
 
@@ -201,7 +201,6 @@ struct SettingsSearchLocalizationTests {
     private static let literal = #""((?:[^"\\\n]|\\.)*)""#
     /// Group 1 is the whole `title:` argument, so both branches of a ternary are read.
     private static let settingRowTitle = #"SettingRow\([^{]*?\btitle:\s*((?:"(?:[^"\\\n]|\\.)*"|[^,)"\n])*)"#
-    private static let tileTitle = #"StorageDashboardTile\(\s*title:\s*"# + literal
     private static let sectionHeader = #"SettingsSearchSectionHeader\(\s*"# + literal
 
     private static func captures(_ pattern: String, in source: String) throws -> [String] {

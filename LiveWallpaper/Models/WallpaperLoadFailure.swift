@@ -26,6 +26,14 @@ enum WallpaperFailureStage: String, Sendable {
     case source, importing = "import", loading, firstFrame = "first-frame", commit, runtime, settings
 }
 
+/// A resource ref the renderer looked for and never found.
+struct WallpaperFailureMissingResource: Equatable, Sendable {
+    let path: String
+    /// false when the engine-assets root was never searched, i.e. not mounted.
+    let searchedEngineAssets: Bool
+    let dependencyID: String?
+}
+
 struct WallpaperFailureSnapshot: Identifiable, Equatable, Sendable {
     let id: UUID
     let title: String
@@ -37,6 +45,11 @@ struct WallpaperFailureSnapshot: Identifiable, Equatable, Sendable {
     let timestamp: Date
     let diagnostics: String
     var wallpaperType: WallpaperType?
+    var sourceURL: URL?
+    /// The source folder's security-scoped bookmark; nil when the attempt has no WPE origin.
+    var sourceBookmark: Data?
+    var missingDependencyIDs: [String] = []
+    var missingResources: [WallpaperFailureMissingResource] = []
 
     /// The browser URL has a fixed budget. Author-controlled names and logs
     /// cannot push the failure code and reason out of its prefilled body.
@@ -105,8 +118,9 @@ final class WallpaperLoadState {
     }
 
     func attempt(for screen: Screen) -> WallpaperLoadAttempt? {
+        // A preparing attempt is keyed by physical display: its candidate commits onto whichever Screen a same-display refresh installed.
         guard let attempt = attempts[screen.id], attempt.displayFingerprint == screen.displayFingerprint,
-              attempt.phase == .failed || attempt.screenIdentity == ObjectIdentifier(screen) else { return nil }
+              attempt.phase != .importing || attempt.screenIdentity == ObjectIdentifier(screen) else { return nil }
         return attempt
     }
 

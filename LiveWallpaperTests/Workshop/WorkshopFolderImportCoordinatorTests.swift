@@ -405,6 +405,54 @@ struct WorkshopFolderImportCoordinatorTests {
         await library.discard()
     }
 
+    @Test("A download scan resolves each history bookmark once, plus once per entry it adds", .timeLimit(.minutes(1)))
+    func downloadScanResolvesEachEntryOnce() async throws {
+        let steam = try SteamDownloads(itemCount: 2)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ScanResolves-\(UUID().uuidString)", isDirectory: true)
+        let suite = try TestScratch.defaultsSuite(prefix: "LiveWallpaperTests.ScanResolves")
+        defer {
+            steam.discard()
+            suite.discard()
+        }
+        let resolves = OSAllocatedUnfairLock(initialState: 0)
+        let manager = SettingsManager(
+            directory: ConfigurationDirectory(root: root.appendingPathComponent("settings")),
+            defaults: suite.defaults,
+            bookmarkResolver: SecurityScopedBookmarkResolver(
+                resolveData: { data in
+                    resolves.withLock { $0 += 1 }
+                    var isStale = false
+                    let url = try URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &isStale)
+                    return (url, isStale)
+                },
+                refreshData: { try $0.bookmarkData() }
+            )
+        )
+        defer { await TestScratch.discard(root, flushing: manager) }
+        let coordinator = WorkshopFolderImportCoordinator(
+            importService: WallpaperEngineImportService(validateVideo: { _ in }, makeBookmark: { try? $0.bookmarkData() }),
+            settings: manager,
+            toastCenter: WorkshopToastCenter(),
+            defaults: suite.defaults
+        )
+        let downloadedIDs = steam.itemFolders.map(\.lastPathComponent)
+        let wallpapers = root.appendingPathComponent("Wallpapers", isDirectory: true)
+        for id in downloadedIDs + ["1001", "1002", "1003", "1004"] {
+            try writeVideoProject(at: wallpapers.appendingPathComponent(id, isDirectory: true), workshopID: id)
+        }
+        coordinator.importProjects(from: [wallpapers])
+        try await settle { !coordinator.isImporting }
+        let history = manager.loadGlobalSettings().recentWPEImports
+        #expect(history.count == downloadedIDs.count + 4)
+        resolves.withLock { $0 = 0 }
+
+        await coordinator.ingestExistingDownloads(using: steam.doctor)
+
+        #expect(manager.loadGlobalSettings().recentWPEImports.count == history.count + downloadedIDs.count, "the scan did not bring the Steam items in beside their local copies")
+        let count = resolves.withLock { $0 }
+        #expect(count <= history.count + downloadedIDs.count, "the scan resolved \(count) bookmarks for \(history.count) history entries")
+    }
+
     // MARK: - Library scan without the Workshop page
 
     @Test("The launch scan imports the bound library's downloads without SteamCMD", .timeLimit(.minutes(1)))
@@ -544,7 +592,7 @@ struct WorkshopFolderImportCoordinatorTests {
         let tombstones: [String]
     }
 
-    /// Imports one Steam download, deletes its folder, writes the acf `acf(itemID)` returns (none for nil), and scans again.
+    /// Imports one Steam download with an acf listing it, deletes its folder, writes the acf `acf(itemID)` returns (keeps the listing for nil), and scans again.
     private func scanAfterSteamRemovedItem(
         removingContentRoot: Bool = false,
         acf: (String) -> String?
@@ -554,8 +602,11 @@ struct WorkshopFolderImportCoordinatorTests {
         defer { steam.discard() }
         let folder = steam.itemFolders[0]
         let itemID = folder.lastPathComponent
+        try writeAppWorkshopACF(appWorkshopACF(installed: [itemID]), steamRoot: steam.root)
         await library.coordinator.ingestExistingDownloads(using: steam.doctor)
         #expect(library.manager.loadGlobalSettings().recentWPEImports.map(\.origin.steamFolderItemID) == [itemID])
+        // Records the baseline listing the item, as the prune after its download would.
+        await library.coordinator.pruneSteamDeletedImports(using: steam.doctor)
 
         try FileManager.default.removeItem(at: removingContentRoot ? folder.deletingLastPathComponent() : folder)
         if let text = acf(itemID) {
@@ -681,6 +732,7 @@ private struct ConflictLibrary {
             importService: WallpaperEngineImportService(validateVideo: { _ in }, makeBookmark: { try? $0.bookmarkData() }),
             settings: manager,
             toastCenter: toastCenter,
+            defaults: suite.defaults,
             removeVanishedImport: { entry in
                 guard let removedIDs else {
                     Issue.record("the scan removed \(entry.origin.workshopID) where no removal was expected")

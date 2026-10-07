@@ -6,14 +6,12 @@ import os
 /// deliberately non-substrings of one another so a report line can be parsed.
 enum WPEImageCacheKind: Int, CaseIterable, Sendable {
     case workshopPreview
-    case scenePreviewDecoded
     case wallpaperThumbnail
     case systemWallpaperLibrary
 
     var label: String {
         switch self {
         case .workshopPreview: "workshopPreview"
-        case .scenePreviewDecoded: "scenePreview"
         case .wallpaperThumbnail: "wallpaperThumb"
         case .systemWallpaperLibrary: "systemLibrary"
         }
@@ -190,7 +188,7 @@ enum WPEImageCacheMeter {
                     return
                 }
                 if let report = shared.report() {
-                    Logger.notice(report, category: .memory)
+                    Logger.debug(report, category: .memory)
                 }
             }
         }

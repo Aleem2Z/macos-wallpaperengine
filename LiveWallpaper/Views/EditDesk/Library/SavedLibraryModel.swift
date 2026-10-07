@@ -221,12 +221,20 @@ final class SavedLibraryModel {
         content.sceneDescriptor?.propertyOverrides.isEmpty ?? true
     }
 
+    /// Whether `configuration` runs `entry` itself: not another copy under its Workshop ID, nor a variant tuning its scene.
+    static func isRunning(_ entry: WPEHistoryEntry, in configuration: ScreenConfiguration) -> Bool {
+        guard let origin = configuration.wpeOrigin, origin.workshopID == entry.origin.workshopID,
+              origin.steamFolderItemID == entry.origin.steamFolderItemID else { return false }
+        return foldsIntoWorkshopRow(configuration.activeWallpaper) && configuration.activeWallpaper.sceneDescriptor?.presetID == nil
+    }
+
     /// The rows of `installed` Workshop IDs that saved entries fold into, each once, in the entries' order.
     static func foldedBookmarkMarks(_ bookmarks: [WallpaperBookmark], installed: Set<String>) -> [LibraryItem.ID] {
         var marks: [LibraryItem.ID] = []
+        var seen: Set<String> = []
         for bookmark in bookmarks {
             guard let workshopID = bookmark.wpeOrigin?.workshopID, installed.contains(workshopID),
-                  foldsIntoWorkshopRow(bookmark.content), !marks.contains("workshop:\(workshopID)") else { continue }
+                  foldsIntoWorkshopRow(bookmark.content), seen.insert(workshopID).inserted else { continue }
             marks.append("workshop:\(workshopID)")
         }
         return marks
@@ -306,7 +314,7 @@ final class SavedLibraryModel {
         case .local: items.filter { !$0.isSteam && $0.kind != .aerial }
         case .aerials: items.filter { $0.kind == .aerial }
         }
-        let sorted = filtered.filter(matchesFilter).sorted { lhs, rhs in
+        return filtered.filter { matchesFilter($0) && (query.isEmpty || matchesQuery($0)) }.sorted { lhs, rhs in
             switch sort {
             case .recentlyUsed: return recentlyUsed(lhs, rhs)
             case .name: return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
@@ -326,7 +334,6 @@ final class SavedLibraryModel {
             #endif
             }
         }
-        return sorted.filter { query.isEmpty || matchesQuery($0) }
     }
 
     private func matchesFilter(_ item: LibraryItem) -> Bool {
@@ -349,7 +356,9 @@ final class SavedLibraryModel {
     #endif
 
     private func matchesQuery(_ item: LibraryItem) -> Bool {
-        if item.title.range(of: query, options: .caseInsensitive) != nil || queryIsWhole(item.kind.localizedName) {
+        if item.title.range(of: query, options: .caseInsensitive) != nil
+            || item.title.translatedWallpaperName.range(of: query, options: .caseInsensitive) != nil
+            || queryIsWhole(item.kind.localizedName) {
             return true
         }
         #if !LITE_BUILD
@@ -463,13 +472,16 @@ final class SavedLibraryModel {
                 isSupported: entry.origin.originalType != .application && entry.origin.originalType != .unknown
             )
         }
+        // Saved entries only fold into installed rows. Keep the first row if an ID repeats,
+        // matching the previous firstIndex lookup without scanning the growing catalog.
+        let workshopIndices = Dictionary(merged.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
         #endif
         let bookmarks = inputs.bookmarks()
         for bookmark in bookmarks {
             var parentID: String?
             #if !LITE_BUILD
             if let workshopID = bookmark.wpeOrigin?.workshopID,
-               let index = merged.firstIndex(where: { $0.id == "workshop:\(workshopID)" }) {
+               let index = workshopIndices["workshop:\(workshopID)"] {
                 if Self.foldsIntoWorkshopRow(bookmark.content) {
                     if let used = bookmark.lastUsedAt,
                        merged[index].lastUsedAt.map({ used > $0 }) ?? true {
@@ -517,16 +529,19 @@ final class SavedLibraryModel {
             let path = inputs.filePath(data).map { Self.normalizedPath(URL(fileURLWithPath: $0)) }
             resolvedPaths[data] = .some(path)
         }
+        let hasResolvedActivePath = resolvedPaths.values.contains { $0 != nil }
         merged += aerialsStatus.assets.map { asset in
             let source = LibraryItem.Source.aerial(asset)
+            let assetPath = hasResolvedActivePath ? Self.normalizedPath(asset.url) : nil
             return LibraryItem(
                 id: "aerial:\(asset.url.path)", title: asset.displayName, kind: .aerial, source: source,
                 isSteam: false, createdAt: .distantPast, lastUsedAt: nil,
-                onDisplays: active.filter { entry in
-                    guard let data = entry.content.activeVideoBookmarkData else { return false }
-                    return data == asset.bookmarkData
-                        || (resolvedPaths[data] ?? nil) == Self.normalizedPath(asset.url)
-                }.map(\.display), thumbnail: .aerial(.init(asset)),
+                onDisplays: active.compactMap { entry in
+                    guard let data = entry.content.activeVideoBookmarkData else { return nil }
+                    guard data == asset.bookmarkData
+                        || (assetPath != nil && (resolvedPaths[data] ?? nil) == assetPath) else { return nil }
+                    return entry.display
+                }, thumbnail: .aerial(.init(asset)),
                 metadata: nil,
                 isVariant: false, parentID: nil, isSupported: true
             )
@@ -713,7 +728,7 @@ final class SavedLibraryModel {
             return cached
         }
         let path = inputs.filePath(bookmarkData).map { Self.normalizedPath(URL(fileURLWithPath: $0)) }
-        filePaths[bookmarkData] = path
+        filePaths[bookmarkData] = .some(path)
         return path
     }
 

@@ -10,7 +10,7 @@ struct WPESceneCustomSettingsCard: View {
     var attemptID: UUID?
 
     @Environment(ScreenManager.self) private var screenManager
-    /// Only the Edit Desk provides one; the old detail page records nothing.
+    /// nil = no undo stack in the environment; edits are not recorded.
     @Environment(EditDeskUndoStack.self) private var undo: EditDeskUndoStack?
     @AppStorage("Inspector.WPESceneCustomSettingsExpanded") private var isExpanded = true
     @State private var editor = Editor()
@@ -457,6 +457,9 @@ struct SceneSettingsRows: View {
                         Text(verbatim: ValueLogic.formattedNumber(ValueLogic.value(for: property, in: values).numberValue ?? 0, for: property))
                             .font(DesignTokens.Typography.metric)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                            .help(Text(verbatim: ValueLogic.formattedNumber(ValueLogic.value(for: property, in: values).numberValue ?? 0, for: property)))
                             .frame(width: DesignTokens.Inspector.sliderValueWidth, alignment: .trailing)
                     }
                 }

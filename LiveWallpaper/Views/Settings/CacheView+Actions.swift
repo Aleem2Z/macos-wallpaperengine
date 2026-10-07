@@ -7,6 +7,10 @@ extension WPECacheManagementView {
         await refreshInventory()
     }
 
+    private var storageLocations: [AppStorageLocation] {
+        AppStorageLocation.current(systemWallpaperRoot: exportService.videosDirectory.deletingLastPathComponent())
+    }
+
     private func refreshInventory() async {
         inventoryScan?.cancel()
         storageScan?.cancel()
@@ -14,7 +18,7 @@ extension WPECacheManagementView {
         let generation = inventoryGeneration
         isLoading = true
         isLoadingInventory = true
-        let locations = AppStorageLocation.current(systemWallpaperRoot: exportService.videosDirectory.deletingLastPathComponent())
+        let locations = storageLocations
         let externalRoots = [
             exportService.videosDirectory,
             WPEEngineAssetsLibrary.shared.resolveAuthorizedRoot(),
@@ -23,7 +27,8 @@ extension WPECacheManagementView {
         let protectedRoots = locations.filter {
             [.steamProfiles, .credentials, .application, .configuration, .preferences, .webData, .steamTools, .systemMetadata].contains($0.kind)
         }.map(\.url)
-        let linked = StorageLinkedSources.current(excluding: externalRoots + protectedRoots)
+        let linked = await StorageLinkedSources.current(excluding: externalRoots + protectedRoots)
+        guard generation == inventoryGeneration, !Task.isCancelled else { return }
         let appScan = Task { await StorageLinkedSources.scan(linked.sources, locations: locations, excluding: externalRoots) }
         let scan = Task { await WPEStorageInventory.compute(doctor: doctorService) }
         storageScan = appScan
@@ -43,34 +48,29 @@ extension WPECacheManagementView {
         #if DEBUG
         await refreshTestArtifacts()
         #endif
-        await refreshVideoStats()
     }
 
-    private func refreshVideoStats() async {
-        isLoadingVideo = true
-        videoStats = await WPEVideoTextureDiskCache.shared.stats()
-        isLoadingVideo = false
-    }
-
-    private func purgeVideoCache() async {
-        let freed = await WPEVideoTextureDiskCache.shared.purgeAll()
-        lastVideoFreedBytes = freed
-        await refreshVideoStats()
+    private func measureCaches(_ kinds: Set<AppStorageLocation.Kind>) async -> [AppStorageMeasurement] {
+        let locations = storageLocations
+        let targets = locations.filter { kinds.contains($0.kind) }
+        let others = locations.filter { !kinds.contains($0.kind) }.map(\.url)
+        return await AppStorageScanner.shared.scan(targets, excluding: others)
     }
 
     func clearCache(_ kind: AppStorageLocation.Kind) async {
         guard !isClearing else { return }
         isClearing = true
         defer { isClearing = false }
-        let before = totalBytes
+        let before = await measureCaches([kind])
         do { try await performClear(kind) } catch { errorMessage = error.localizedDescription }
+        let after = await measureCaches([kind])
+        lastStorageFreedBytes = Self.freedBytes(of: [kind], before: before, after: after)
         await refreshStats()
-        lastStorageFreedBytes = before > totalBytes ? before - totalBytes : 0
     }
 
     private func performClear(_ kind: AppStorageLocation.Kind) async throws {
         switch kind {
-        case .video: lastVideoFreedBytes = await WPEVideoTextureDiskCache.shared.purgeAll()
+        case .video: _ = await WPEVideoTextureDiskCache.shared.purgeAll()
         case .query: await workshopServices.queryCache.clear()
         case .previews: await WorkshopPreviewDiskCache.shared.clear()
         case .shaders:
@@ -86,26 +86,36 @@ extension WPECacheManagementView {
         guard !isClearing else { return }
         isClearing = true
         defer { isClearing = false }
-        let before = totalBytes
+        let kinds = Set(AppStorageLocation.Kind.allCases.filter(\.canClear))
+        let before = await measureCaches(kinds)
         for kind in AppStorageLocation.Kind.allCases where kind.canClear {
             do { try await performClear(kind) } catch { errorMessage = error.localizedDescription }
         }
+        let after = await measureCaches(kinds)
+        lastStorageFreedBytes = Self.freedBytes(of: kinds, before: before, after: after)
         await refreshStats()
-        lastStorageFreedBytes = before > totalBytes ? before - totalBytes : 0
+    }
+
+    /// Sums each target location's shrink only, so caches that grow during the clear do not offset it.
+    /// nil = a target could not be read in full before or after the clear, so no figure is exact.
+    static func freedBytes(
+        of kinds: Set<AppStorageLocation.Kind>, before: [AppStorageMeasurement], after: [AppStorageMeasurement]
+    ) -> UInt64? {
+        let targets = before.filter { kinds.contains($0.location.kind) }
+        let targetsAfter = after.filter { kinds.contains($0.location.kind) }
+        guard !targets.contains(where: { $0.status == .unavailable }),
+              !targetsAfter.contains(where: { $0.status == .partial || $0.status == .unavailable }) else { return nil }
+        let remaining = Dictionary(targetsAfter.map { ($0.id, $0.bytes) }, uniquingKeysWith: +)
+        return targets.reduce(0) { freed, measurement in
+            let left = remaining[measurement.id] ?? 0
+            return freed + (measurement.bytes > left ? measurement.bytes - left : 0)
+        }
     }
 
     func confirmClearAllCaches() {
         let size = byteFormatter.string(fromByteCount: Int64(clamping: clearableBytes))
         pendingDestructive = PendingDestructive(.clearAllStorageCaches(byteSize: size)) {
             Task { await clearAllCaches() }
-        }
-    }
-
-    func confirmPurgeVideoCache() {
-        let bytes = videoStats?.totalBytes ?? 0
-        let size = byteFormatter.string(fromByteCount: Int64(bytes))
-        pendingDestructive = PendingDestructive(.clearSceneVideoCache(byteSize: size)) {
-            Task { await purgeVideoCache() }
         }
     }
 }

@@ -15,6 +15,18 @@ import UniformTypeIdentifiers
 @MainActor
 @Suite("WPE Metal scene renderer")
 struct WPEMetalSceneRendererTests {
+    @Test("Script layer table gives sound entries their authored parent")
+    func scriptLayerTableSoundEntryKeepsParent() throws {
+        let source = #"""
+        {"camera":{"center":"0 0 0"},"general":{"orthogonalprojection":{"width":64,"height":64}},
+         "objects":[{"id":1,"name":"group","image":"models/util/solidlayer.json"},
+                    {"id":2,"name":"Loop","type":"sound","sound":["sounds/loop.mp3"],"parent":1}]}
+        """#
+        let document = try WPESceneDocumentParser.parse(data: Data(source.utf8))
+        let table = WPEMetalSceneRenderer.scriptLayerTable(for: document)
+        #expect(table.first { $0.id == "2" }?.parentID == "1")
+    }
+
     #if DEBUG
     @Test("Oracle media configuration is renderer-local and immutable once loading starts")
     func oracleMediaConfigurationIsLoadScoped() async throws {
@@ -834,6 +846,52 @@ struct WPEMetalSceneRendererTests {
         #expect(changeCount == 1)
         #expect(error.canRetry)
         #expect(session.summary.activity == .error)
+    }
+
+    @Test("A load aborted by a missing texture keeps that load's misses for the failure report")
+    func failedLoadKeepsFailureTimeResolution() async throws {
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let fixture = try MetalSceneFixture.materialTextureScene(color: CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        defer { fixture.cleanup() }
+        try FileManager.default.removeItem(at: fixture.root.appendingPathComponent("materials/base.png"))
+
+        let surface = WPERenderSurface(frame: CGRect(x: 0, y: 0, width: 64, height: 64), device: device)
+        let renderActor = WPEDisplayRenderActor(backing: .main)
+        let renderer = try WPEMetalSceneRenderer(
+            descriptor: fixture.descriptor,
+            cacheRootURL: fixture.root,
+            dependencyMounts: [],
+            surfaceControl: surface,
+            mailbox: surface.mailbox,
+            presentLayer: WPEPresentLayer(layer: surface.metalLayer),
+            drawableSize: surface.metalLayer.drawableSize,
+            device: device
+        )
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 64, height: 64),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        let session = SceneWallpaperSession(window: window, renderActor: renderActor, surface: surface)
+        defer { session.cleanup() }
+
+        await renderActor.adopt(WPERendererHandoff(renderer: renderer).renderer)
+        await session.beginLoad()
+        #expect(session.loadError != nil)
+        #expect(await session.prepareForDisplay(timeout: .seconds(1)) == .failed)
+        let missingAtFailure = session.rendererDiagnostics?.resolution.failureMissingResources.map(\.path) ?? []
+        #expect(missingAtFailure.contains { $0.hasPrefix("materials/base") })
+
+        await session.pollRendererState()
+        let missingAfterTeardown = session.rendererDiagnostics?.resolution.failureMissingResources.map(\.path) ?? []
+        #expect(missingAfterTeardown == missingAtFailure)
+        let eventCount = session.rendererDiagnostics?.resolution.events.count
+
+        await #expect(throws: (any Error).self) { try await renderActor.reload() }
+        await session.pollRendererState()
+        #expect(session.rendererDiagnostics?.resolution.events.count == eventCount)
     }
 
     @Test("System audio demand requires scene opt-in and releases during preview suspension")
@@ -2233,6 +2291,80 @@ struct WPEMetalSceneRendererTests {
         #expect(back.pointerPosition == SIMD2(0.1, 0.9))
         #expect(back.pointerPositionLast == SIMD2(0.1, 0.9))
     }
+
+    @Test("An oracle frame override keeps its pointer while the live pointer is off-scene")
+    func oraclePointerIsNotReplacedByHeldPointer() throws {
+        let fixture = try MetalSceneFixture.solidColorScene()
+        defer { fixture.cleanup() }
+        WPEOracleMode.testingOverride = true
+        let renderer: WPEMetalSceneRenderer
+        do {
+            defer { WPEOracleMode.testingOverride = nil }
+            renderer = try WPEMetalSceneRenderer(
+                descriptor: fixture.descriptor, cacheRootURL: fixture.root, dependencyMounts: [],
+                frame: CGRect(x: 0, y: 0, width: 64, height: 64),
+                device: #require(MTLCreateSystemDefaultDevice())
+            )
+        }
+        defer { renderer.cleanup() }
+        renderer.sceneRenderSize = CGSize(width: 64, height: 64)
+        let oraclePointer = try #require(renderer.oracleFrameOverride).pointer
+        renderer.previousPointer = SIMD2(0.9, 0.1)
+        try #require(oraclePointer != renderer.previousPointer)
+
+        let context = renderer.sampleFrameContext(inputs: WPEFrameInputs(
+            clickCaptureEnabled: false, pointerSample: .inactive,
+            pointerFrame: .neutral, preferredFramesPerSecond: 60
+        ))
+
+        #expect(context.pointer == oraclePointer)
+        #expect(context.uniforms.pointerPosition == oraclePointer)
+        #expect(context.uniforms.pointerPositionLast == oraclePointer)
+    }
+
+    @Test("A non-.tex texture path's payload probe does not mask the converted file's decode error")
+    func payloadProbeDoesNotMaskTextureDecodeError() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WPEMetalSceneRenderer-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let materials = root.appendingPathComponent("materials", isDirectory: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("models", isDirectory: true), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: materials, withIntermediateDirectories: true)
+        try Data(#"{ "material": "materials/hero.json" }"#.utf8)
+            .write(to: root.appendingPathComponent("models/hero.json"))
+        try Data(#"{ "passes": [{ "shader": "genericimage2", "textures": ["materials/foo.variant"] }] }"#.utf8)
+            .write(to: materials.appendingPathComponent("hero.json"))
+        try Data("TEXV0005\0TEXI0001\0corrupt".utf8).write(to: materials.appendingPathComponent("foo.variant.tex"))
+        let scene = """
+        {
+          "camera": { "center": "0 0 0" },
+          "general": { "orthogonalprojection": { "width": 64, "height": 64, "auto": true } },
+          "objects": [{ "id": "hero", "name": "Hero Layer", "type": "image", "image": "models/hero.json",
+                        "origin": "0.5 0.5 0", "scale": "1 1 1", "alpha": 1 }]
+        }
+        """
+        try Data(scene.utf8).write(to: root.appendingPathComponent("scene.json"))
+        let renderer = try WPEMetalSceneRenderer(
+            descriptor: SceneDescriptor(
+                workshopID: UUID().uuidString, cacheRelativePath: "wpe-cache/test",
+                entryFile: "scene.json", capabilityTier: .imageOnly
+            ),
+            cacheRootURL: root, dependencyMounts: [],
+            frame: CGRect(x: 0, y: 0, width: 64, height: 64),
+            device: #require(MTLCreateSystemDefaultDevice())
+        )
+        defer { renderer.cleanup() }
+
+        await #expect(throws: (any Error).self) {
+            try await renderer.load()
+        }
+
+        let diagnostic = try #require(renderer.loadDiagnostics)
+        guard case .texture = diagnostic else {
+            Issue.record("Expected the .tex decode failure, got \(diagnostic)")
+            return
+        }
+    }
 }
 
 @MainActor
@@ -3389,6 +3521,8 @@ extension WPEMetalSceneRendererTests {
         )
         defer { renderer.cleanup() }
         try await renderer.load()
+        // Script barriers do not wait for GPU completion; finish each manually advanced frame before claiming another slot.
+        renderer.executor.synchronizeFrameCompletion = true
         #expect(renderer.dynamicAnglesScriptInstances["directional"] != nil)
         #expect(renderer.dynamicColorScriptInstances["directional"] != nil)
         let initial = try #require(renderer.lastFrameDirectionalLighting.lights.first)
@@ -3451,6 +3585,87 @@ extension WPEMetalSceneRendererTests {
                                                               parentByID: [:], ownVisibilityByID: ["light": false])
         #expect(hidden.lights.isEmpty && hidden.metadata.x == 0)
         #expect(hidden.uniformPayload.count == 1, "even an empty light list must bind a valid zero record")
+    }
+
+    @Test("Directional lights resolve through text and particle parents; missing or cyclic parents still reject")
+    func directionalLightingResolvesTextAndParticleParents() throws {
+        let quarterTurn = "0 0 \(Double.pi / 2)"
+        let scene: [String: Any] = [
+            "camera": ["center": "0 0 0"],
+            "general": ["orthogonalprojection": ["width": 64, "height": 64]],
+            "objects": [
+                ["id": "label", "text": "A", "origin": "4 5 0", "angles": quarterTurn],
+                ["id": "emitter", "particle": "particles/none.json", "origin": "6 7 0", "angles": quarterTurn],
+                ["id": "text-light", "light": "ldirectional", "parent": "label", "color": "1 1 1", "intensity": 1],
+                ["id": "particle-light", "light": "ldirectional", "parent": "emitter", "color": "1 1 1", "intensity": 1],
+            ],
+        ]
+        let document = try WPESceneDocumentParser.parse(data: JSONSerialization.data(withJSONObject: scene))
+        let transforms = WPEMetalSceneRenderer.lightingLocalTransforms(in: document)
+        let lighting = WPESceneDirectionalLightingSnapshot.make(
+            lights: document.lightObjects, localTransforms: transforms,
+            parentByID: document.objectParentByID, ownVisibilityByID: [:]
+        )
+        #expect(lighting.unresolvedObjectIDs.isEmpty)
+        #expect(Set(lighting.lights.map(\.objectID)) == ["text-light", "particle-light"])
+        for light in lighting.lights {
+            // Rz(90°) turns the local -X basis into world -Y.
+            #expect(abs(light.uniforms.direction.x) < 0.001 && abs(light.uniforms.direction.y + 1) < 0.001, "\(light.objectID)")
+        }
+        let light = try #require(document.lightObjects.first { $0.id == "text-light" })
+        let missing = WPESceneDirectionalLightingSnapshot.make(
+            lights: [light], localTransforms: transforms, parentByID: ["text-light": "ghost"], ownVisibilityByID: [:]
+        )
+        #expect(missing.lights.isEmpty && missing.unresolvedObjectIDs == ["text-light"])
+        let cyclic = WPESceneDirectionalLightingSnapshot.make(
+            lights: [light], localTransforms: transforms,
+            parentByID: ["text-light": "label", "label": "emitter", "emitter": "label"], ownVisibilityByID: [:]
+        )
+        #expect(cyclic.lights.isEmpty && cyclic.unresolvedObjectIDs == ["text-light"])
+    }
+
+    @Test("A light under an unrotated text in a rotated group turns once, by the group's angle")
+    func directionalLightUnderTextComposesGroupAngleOnce() throws {
+        let scene: [String: Any] = [
+            "camera": ["center": "0 0 0"],
+            "general": ["orthogonalprojection": ["width": 64, "height": 64]],
+            "objects": [
+                ["id": "group", "name": "group", "origin": "0 0 0", "angles": "0 0 \(Double.pi / 2)"],
+                ["id": "label", "text": "A", "parent": "group", "origin": "4 5 0", "angles": "0 0 0"],
+                ["id": "light", "light": "ldirectional", "parent": "label", "color": "1 1 1", "intensity": 1],
+            ],
+        ]
+        let document = try WPESceneDocumentParser.parse(data: JSONSerialization.data(withJSONObject: scene))
+        let lighting = WPESceneDirectionalLightingSnapshot.make(
+            lights: document.lightObjects, localTransforms: WPEMetalSceneRenderer.lightingLocalTransforms(in: document),
+            parentByID: document.objectParentByID, ownVisibilityByID: [:]
+        )
+        let light = try #require(lighting.lights.first)
+        // Rz(90°) turns the local -X basis into world -Y; composing the group twice would give +X.
+        #expect(abs(light.uniforms.direction.x) < 0.001 && abs(light.uniforms.direction.y + 1) < 0.001)
+    }
+
+    @Test("A directional light parented to a particle emitter contributes in the rendered frame")
+    func directionalLightUnderParticleParentPublishes() async throws {
+        let fixture = try MetalSceneFixture.directionalModelScene(lightingEnabled: true)
+        defer { fixture.cleanup() }
+        let url = fixture.root.appendingPathComponent("scene.json")
+        var scene = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        var objects = try #require(scene["objects"] as? [[String: Any]])
+        objects[1]["parent"] = "emitter"
+        objects.append(["id": "emitter", "particle": "particles/none.json", "origin": "0 0 0", "angles": "0 0 \(Double.pi / 2)"])
+        scene["objects"] = objects
+        try JSONSerialization.data(withJSONObject: scene).write(to: url)
+        let renderer = try WPEMetalSceneRenderer(
+            descriptor: fixture.descriptor, cacheRootURL: fixture.root, dependencyMounts: [],
+            frame: CGRect(x: 0, y: 0, width: 64, height: 64), device: #require(MTLCreateSystemDefaultDevice())
+        )
+        defer { renderer.cleanup() }
+        try await renderer.load()
+        _ = try renderer.renderCurrentFrame(inputs: renderer.makeFrameInputs())
+        #expect(renderer.lastFrameDirectionalLighting.unresolvedObjectIDs.isEmpty)
+        let light = try #require(renderer.lastFrameDirectionalLighting.lights.first)
+        #expect(abs(light.uniforms.direction.x) < 0.001 && abs(light.uniforms.direction.y + 1) < 0.001)
     }
 }
 

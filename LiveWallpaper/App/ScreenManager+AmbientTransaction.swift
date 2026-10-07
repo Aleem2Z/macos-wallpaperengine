@@ -129,12 +129,13 @@ extension ScreenManager {
                     self.htmlCoordinator.refreshAudioLeadership()
                     self.notifyWallpaperSessionChanged()
                 },
-                beforeDiscard: { [weak self, weak screen] result in
-                    guard let self, let screen, let attemptID,
+                beforeDiscard: { [weak self] result in
+                    guard let self, let attemptID, let screen = currentScreen(),
                           WallpaperCandidateErrorPolicy.shouldPublish(result, isStillCurrent: isCandidateStillCurrent()) else { return }
                     let error = candidate.runtimeError ?? .wallpaperPreparationFailed(type: candidate.wallpaperType, timedOut: result == .timedOut)
                     var cause = WallpaperFailureCause.runtime(error)
                     var diagnostics = ""
+                    var missingResources: [WallpaperFailureMissingResource] = []
                     // Web's counterpart of the scene branch below; `WebFailureCause` is what
                     // keeps a 404, a revoked folder and a renderer crash from sharing one code.
                     if let ambient = candidate as? AmbientWallpaperSession,
@@ -151,15 +152,20 @@ extension ScreenManager {
                            case let .scene(descriptor) = config.activeWallpaper {
                             diagnostics = WPERenderDiagnosticReport.make(descriptor: descriptor, diagnostics: scene.rendererDiagnostics, errorCode: cause.code)
                         }
+                        missingResources = scene.rendererDiagnostics?.resolution.failureMissingResources ?? []
                     }
                     #endif
                     guard isCandidateStillCurrent() else { return }
-                    failWallpaperAttempt(attemptID, for: screen, cause: cause, stage: result == .timedOut ? .firstFrame : .loading, diagnostics: diagnostics)
+                    failWallpaperAttempt(
+                        attemptID, for: screen, cause: cause, stage: result == .timedOut ? .firstFrame : .loading,
+                        diagnostics: diagnostics, missingResources: missingResources
+                    )
                 }
             )
 
+            let attemptScreen = currentScreen() ?? screen
             if result == .cancelled, let attemptID {
-                wallpaperLoads.clear(for: screen, matching: attemptID)
+                wallpaperLoads.clear(for: attemptScreen, matching: attemptID)
             }
             if let error = WallpaperCandidateErrorPolicy.errorToPublish(
                 result,
@@ -167,8 +173,8 @@ extension ScreenManager {
                 candidateError: candidate.runtimeError,
                 fallbackWallpaperType: candidate.wallpaperType
             ) {
-                if let attemptID, wallpaperLoads.attempt(for: screen)?.failure == nil {
-                    failWallpaperAttempt(attemptID, for: screen, cause: .runtime(error), stage: .commit)
+                if let attemptID, wallpaperLoads.attempt(for: attemptScreen)?.failure == nil {
+                    failWallpaperAttempt(attemptID, for: attemptScreen, cause: .runtime(error), stage: .commit)
                 }
                 setTransientRuntimeError(error, for: screenID, failedProposal: proposedConfiguration)
                 if attemptID == nil {
@@ -181,7 +187,7 @@ extension ScreenManager {
                     for: screenID
                 )
             }
-            let attempt = wallpaperLoads.attempt(for: screen)
+            let attempt = wallpaperLoads.attempt(for: attemptScreen)
             completion?(result, attempt?.id == attemptID ? attempt?.failure : nil)
         }
         work.task = task

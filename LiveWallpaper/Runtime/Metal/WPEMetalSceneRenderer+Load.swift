@@ -33,6 +33,8 @@ extension WPEMetalSceneRenderer {
         sceneTestingObjectSummary = ""
         sceneTestingMessages = []
         spanFrames?.reset(generation: loadGeneration)
+        // Cleared here rather than in `retireRuntimeState`: a failed load's misses must outlive its teardown for the failure report.
+        resolutionTracer.reset()
         let generation = loadGeneration
         completedPresentGeneration = nil
         failedPresentGeneration = nil
@@ -778,6 +780,7 @@ extension WPEMetalSceneRenderer {
             layers.append(WPESceneScriptLayerInfo(
                 id: object.id, name: object.name, size: .zero, origin: .zero,
                 index: document.objectPaintOrder[object.id] ?? layers.count, parentName: nil,
+                parentID: document.objectParentByID[object.id],
                 initialVisible: document.ownVisibilityByID[object.id] ?? object.visible,
                 initialConfiguration: initialConfiguration(object.id)
             ))

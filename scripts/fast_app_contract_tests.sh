@@ -117,6 +117,9 @@ PARALLEL_SUITES=(
   WPESceneScriptSharedLayerOrderTests
   WPESceneScriptVideoBridgeTests
   WPEUploadCancellationOracleTests
+  WPESceneParallaxBindingInferenceTests
+  WPESceneCameraParallaxScriptTests
+  WPESceneTestingReportTests
   InstalledOwnershipCharacterizationTests
   # Persistence/config/storage correctness. Deterministic, hardware-free, and
   # each one covers a defect that shipped: a lost settings generation, a refused
@@ -260,6 +263,11 @@ PARALLEL_SUITES=(
   ColorAdjustmentsViewResetTests
   OverlaysInspectorPanelPickerTests
   WPESceneTimelineTests
+  # Acf parsing, cache-clear accounting, modal display targets and pass-contract resolution are pure model checks.
+  SteamWorkshopManifestACFTests
+  CacheClearAccountingTests
+  ModalDisplayTargetTests
+  WPERenderContractResolutionTests
 )
 
 # These fail when other suites run beside them: they share process-wide state
@@ -287,6 +295,11 @@ SERIAL_SUITES=(
   WPESceneMediaEventDispatchTests
   MountedGIFHostVisibilityTests
   HTMLWallpaperRuntimeScriptTests
+  # Web isolation enforced by WebKit itself: CSP egress, WebRTC blocker, folder nonce, navigation policy.
+  NetworkIsolationEnforcementTests
+  FolderURLSchemeHandlerIsolationTests
+  HTMLWallpaperViewSourceIsolationTests
+  HTMLWallpaperNavigationPolicyTests
   WPEHoverHitRectTests
   WorkshopFolderImportCoordinatorTests
   WPELocalCopySupersedeTests
@@ -347,6 +360,9 @@ SERIAL_SUITES=(
   WPEUniformSourceTraceTests
   WPEEffectTextureProjectionTests
   WPEEffectTextureProjectionConsumerReplayTests
+  # Subscription sync writes the shared download coordinator's settled phases.
+  WorkshopSubscriptionSyncTests
+  WorkshopSteamDeletedPruneTests
 )
 
 action="test"

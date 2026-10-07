@@ -67,12 +67,12 @@ struct WPERenderGraphBuilder: Sendable {
         // handler attached to a puppet bone). Their geometry is still needed
         // even when they have no children or visible effects to draw.
         let cursorRegionIDs = Set(document.imageObjects.filter {
-            [$0.visibleScript, $0.alphaScript].contains { $0?.contains("cursor") == true }
+            Self.cursorRoutedScripts(of: $0).contains { Self.namesCursorHandler($0) }
         }.map(\.id))
         let composeWrappersToDrop = Self.particleOnlyComposeWrapperIDs(
             in: document
         ).union(Self.emptyComposeWrapperIDs(in: document, objectByID: objectByID))
-            .union(noOpFullFrameDrops).subtracting(cursorRegionIDs)
+            .union(noOpFullFrameDrops)
         let visibleLayerIDs = Set(document.imageObjects
             .filter { !composeWrappersToDrop.contains($0.id) }
             .filter {
@@ -430,6 +430,22 @@ struct WPERenderGraphBuilder: Sendable {
         return current
     }
 
+    /// Render depth for every object whose anchor is in `drivers`: the anchor's live value, never the object's own.
+    static func effectiveParallaxDepths(
+        live: [String: SIMD2<Double>],
+        parentByID: [String: String],
+        drivenBy drivers: Set<String>
+    ) -> [String: SIMD2<Double>] {
+        var result: [String: SIMD2<Double>] = [:]
+        for id in live.keys {
+            let anchor = parallaxAnchorNodeID(of: id, parentByID: parentByID, depthByID: live)
+            if drivers.contains(anchor), let depth = live[anchor] {
+                result[id] = depth
+            }
+        }
+        return result
+    }
+
     static func propagatingParallaxDepthThroughParents(
         _ layers: [WPERenderLayer],
         objectParentByID: [String: String] = [:],
@@ -632,6 +648,28 @@ struct WPERenderGraphBuilder: Sendable {
             current = parent.parentObjectID
         }
         return false
+    }
+
+    private static let cursorHandlerNames = Set([
+        WPELayerScriptCursorEvent.move, .down, .up, .click, .rightDown, .rightUp, .enter, .leave,
+    ].map { Substring($0.handlerName) })
+
+    /// Every script family the renderer routes cursor events to for this object.
+    private static func cursorRoutedScripts(of object: WPESceneImageObject) -> [String] {
+        let transforms = [
+            object.originScript, object.scaleScript, object.anglesScript, object.colorScript, object.parallaxDepthScript,
+        ]
+        let effects = object.effects.flatMap { effect in
+            [effect.visibleScript] + effect.passOverrides.flatMap { $0.constantScripts.values.map(Optional.some) }
+        }
+        return [object.visibleScript, object.alphaScript].compactMap(\.self) + (transforms + effects).compactMap { $0?.script }
+    }
+
+    /// Whole identifiers only: `cursorWorldPosition` readers are not hit regions.
+    private static func namesCursorHandler(_ script: String?) -> Bool {
+        guard let script else { return false }
+        return script.split { !($0.isLetter || $0.isNumber || $0 == "_" || $0 == "$") }
+            .contains(where: cursorHandlerNames.contains)
     }
 
     private static func userToggleableVisibilityIDs(in document: WPESceneDocument) -> Set<String> {
@@ -1193,7 +1231,8 @@ struct WPERenderGraphBuilder: Sendable {
             parallaxDepth: object.parallaxDepth,
             sortIndex: sortIndex,
             meshMaterialTextures: model.meshMaterialTextures,
-            meshMaterialConstants: model.meshMaterialConstants
+            meshMaterialConstants: model.meshMaterialConstants,
+            meshMaterialBlending: model.meshMaterialBlending
         )
     }
 
@@ -1382,14 +1421,15 @@ struct WPERenderGraphBuilder: Sendable {
                 .map(loadPuppetClipMaskNames(path:)) ?? []
             let meshMaterials = explicitMaterial == nil
                 ? meshMaterialInputs(of: model, layerMaterial: material)
-                : (textures: [:], constants: [:])
+                : (textures: [:], constants: [:], blending: [:])
             return WPEModelDescriptor(
                 materialPath: material,
                 puppetPath: object.imageRelativePath,
                 rendersAsSceneModel: true,
                 puppetClipMaskNames: clipMaskNames,
                 meshMaterialTextures: meshMaterials.textures,
-                meshMaterialConstants: meshMaterials.constants
+                meshMaterialConstants: meshMaterials.constants,
+                meshMaterialBlending: meshMaterials.blending
             )
         }
         guard extensionName == "json" else {
@@ -1425,18 +1465,24 @@ struct WPERenderGraphBuilder: Sendable {
     private func meshMaterialInputs(
         of model: WPEPuppetModel,
         layerMaterial: String
-    ) -> (textures: [Int: [Int: WPETextureReference]], constants: [Int: [String: WPESceneShaderConstantValue]]) {
+    ) -> (
+        textures: [Int: [Int: WPETextureReference]],
+        constants: [Int: [String: WPESceneShaderConstantValue]],
+        blending: [Int: String]
+    ) {
         var textures: [Int: [Int: WPETextureReference]] = [:]
         var constants: [Int: [String: WPESceneShaderConstantValue]] = [:]
+        var blending: [Int: String] = [:]
         for (meshIndex, mesh) in model.meshes.enumerated()
             where !mesh.materialPath.isEmpty && mesh.materialPath != layerMaterial {
             // An unreadable submesh material leaves that mesh drawing with the layer material.
             guard let pass = (try? loadMaterial(path: mesh.materialPath))?.passes.first else { continue }
             textures[meshIndex] = pass.textures
             constants[meshIndex] = pass.constants
+            blending[meshIndex] = pass.blending
         }
-        assert(Set(textures.keys) == Set(constants.keys))
-        return (textures, constants)
+        assert(Set(textures.keys) == Set(constants.keys) && Set(textures.keys) == Set(blending.keys))
+        return (textures, constants, blending)
     }
 
     private static func parseModelCropOffset(_ raw: Any?) -> SIMD2<Double>? {
@@ -2541,6 +2587,7 @@ private struct WPEModelDescriptor {
     let sourceJSON: WPESceneJSONValue?
     let meshMaterialTextures: [Int: [Int: WPETextureReference]]
     let meshMaterialConstants: [Int: [String: WPESceneShaderConstantValue]]
+    let meshMaterialBlending: [Int: String]
     var requiresFinalSceneComposite: Bool { puppetPath != nil && !rendersAsSceneModel }
 
     init(
@@ -2552,7 +2599,8 @@ private struct WPEModelDescriptor {
         puppetClipMaskNames: [String] = [],
         sourceJSON: WPESceneJSONValue? = nil,
         meshMaterialTextures: [Int: [Int: WPETextureReference]] = [:],
-        meshMaterialConstants: [Int: [String: WPESceneShaderConstantValue]] = [:]
+        meshMaterialConstants: [Int: [String: WPESceneShaderConstantValue]] = [:],
+        meshMaterialBlending: [Int: String] = [:]
     ) {
         self.materialPath = materialPath
         self.puppetPath = puppetPath
@@ -2563,6 +2611,7 @@ private struct WPEModelDescriptor {
         self.sourceJSON = sourceJSON
         self.meshMaterialTextures = meshMaterialTextures
         self.meshMaterialConstants = meshMaterialConstants
+        self.meshMaterialBlending = meshMaterialBlending
     }
 }
 
@@ -2640,7 +2689,8 @@ private extension WPERenderLayer {
             parallaxDepth: parallaxDepth,
             sortIndex: sortIndex,
             meshMaterialTextures: meshMaterialTextures,
-            meshMaterialConstants: meshMaterialConstants
+            meshMaterialConstants: meshMaterialConstants,
+            meshMaterialBlending: meshMaterialBlending
         )
     }
 
@@ -2673,7 +2723,8 @@ extension WPERenderLayer {
             parallaxDepth: parallaxDepth,
             sortIndex: sortIndex,
             meshMaterialTextures: meshMaterialTextures,
-            meshMaterialConstants: meshMaterialConstants
+            meshMaterialConstants: meshMaterialConstants,
+            meshMaterialBlending: meshMaterialBlending
         )
     }
 
@@ -2706,7 +2757,8 @@ private extension WPERenderLayer {
             parallaxDepth: parallaxDepth,
             sortIndex: sortIndex,
             meshMaterialTextures: meshMaterialTextures,
-            meshMaterialConstants: meshMaterialConstants
+            meshMaterialConstants: meshMaterialConstants,
+            meshMaterialBlending: meshMaterialBlending
         )
     }
 
@@ -2736,7 +2788,8 @@ private extension WPERenderLayer {
             parallaxDepth: parallaxDepth,
             sortIndex: sortIndex,
             meshMaterialTextures: meshMaterialTextures,
-            meshMaterialConstants: meshMaterialConstants
+            meshMaterialConstants: meshMaterialConstants,
+            meshMaterialBlending: meshMaterialBlending
         )
     }
 
@@ -2784,7 +2837,8 @@ private extension WPERenderLayer {
             parallaxDepth: parallaxDepth,
             sortIndex: sortIndex,
             meshMaterialTextures: meshMaterialTextures,
-            meshMaterialConstants: meshMaterialConstants
+            meshMaterialConstants: meshMaterialConstants,
+            meshMaterialBlending: meshMaterialBlending
         )
     }
 
@@ -2814,7 +2868,8 @@ private extension WPERenderLayer {
             parallaxDepth: depth,
             sortIndex: sortIndex,
             meshMaterialTextures: meshMaterialTextures,
-            meshMaterialConstants: meshMaterialConstants
+            meshMaterialConstants: meshMaterialConstants,
+            meshMaterialBlending: meshMaterialBlending
         )
     }
 }

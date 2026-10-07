@@ -27,7 +27,7 @@ extension WPEMetalSceneRenderer {
         let pointer = mailbox.read()
         return WPEFrameInputs(
             clickCaptureEnabled: pointer.clickCaptureEnabled,
-            pointerSample: pointerSampler.sample(),
+            pointerSample: pointerSampler.sample(using: pointer, from: mailbox),
             pointerFrame: pointer.pointerFrame,
             preferredFramesPerSecond: effectiveFPS,
             buttonCursor: pointer.buttonCursor,
@@ -143,13 +143,22 @@ extension WPEMetalSceneRenderer {
         // Aggregate the complete per-instance cursor burst before claiming a VM job.
         // Hover uses this frame's transformed geometry before every button edge.
         var cursorAttachmentGeometry: [String: WPERenderLayerGeometry] = [:]
-        if framePipeline.layers.contains(where: {
-            $0.graphLayer.attachment != nil
-                && (layerScriptInstances[$0.id] != nil || layerAlphaScriptInstances[$0.id] != nil)
-        }) {
-            let attachments = try executor.makeAttachmentFrameContext(
-                for: framePipeline, runtimeUniforms: uniforms, sceneSize: sceneRenderSize
-            )
+        var cursorScriptObjectIDs: Set<String> = []
+        forEachCursorScriptInstance { objectID, _ in cursorScriptObjectIDs.insert(objectID) }
+        if Self.scriptedLayerFollowsAttachment(
+            in: framePipeline,
+            isScripted: cursorScriptObjectIDs.contains,
+            objectParentByID: executor.parallaxObjectParentByID
+        ) {
+            let attachments: WPEMetalRenderExecutor.PuppetAttachmentFrameContext
+            do {
+                attachments = try executor.makeAttachmentFrameContext(
+                    for: framePipeline, runtimeUniforms: uniforms, sceneSize: sceneRenderSize
+                )
+            } catch {
+                signposter.endInterval("scriptTick", scriptState)
+                throw error
+            }
             for layer in framePipeline.layers {
                 cursorAttachmentGeometry[layer.id] = executor.layerApplyingAttachmentFollow(
                     layer.graphLayer, context: attachments
@@ -335,6 +344,32 @@ extension WPEMetalSceneRenderer {
         return rendered
     }
 
+    static func scriptedLayerFollowsAttachment(
+        in pipeline: WPEPreparedRenderPipeline,
+        isScripted: (String) -> Bool,
+        objectParentByID: [String: String]
+    ) -> Bool {
+        guard pipeline.layers.contains(where: { $0.graphLayer.attachment != nil }) else { return false }
+        let layersByObjectID = Dictionary(
+            pipeline.layers.map { ($0.graphLayer.objectID, $0.graphLayer) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        // Same parent walk as `layerApplyingAttachmentFollow`: an attachment anywhere up the chain moves the layer.
+        return pipeline.layers.contains { layer in
+            guard isScripted(layer.id) else { return false }
+            var currentID: String? = layer.graphLayer.objectID
+            var seen: Set<String> = []
+            while let id = currentID, seen.insert(id).inserted, seen.count <= 100 {
+                let node = id == layer.graphLayer.objectID ? layer.graphLayer : layersByObjectID[id]
+                if node?.attachment != nil {
+                    return true
+                }
+                currentID = node?.parentObjectID ?? objectParentByID[id]
+            }
+            return false
+        }
+    }
+
     /// `sampled` is this frame's keyframed camera motion; a channel no script drives keeps it.
     func applyScriptCameraMotion(_ scriptTransforms: LiveScriptTransforms, sampled: WPESceneCameraMotionSample) {
         guard let definition = cameraMotionPlayback?.definition else { return }
@@ -379,7 +414,7 @@ extension WPEMetalSceneRenderer {
         }
         refreshParallaxRootOrigins(from: transforms)
         let lighting = WPESceneDirectionalLightingSnapshot.make(
-            lights: sceneLightObjects, localTransforms: layerAncestorLocalTransformsByID,
+            lights: sceneLightObjects, localTransforms: lightingLocalTransformsByID,
             parentByID: objectParentByID, ownVisibilityByID: ownVisibilityByID,
             origins: transforms.origins, scales: transforms.scales, angles: transforms.angles,
             colors: transforms.colors,
@@ -444,6 +479,7 @@ extension WPEMetalSceneRenderer {
             let hasLayerWritingScripts = !dynamicOriginScriptInstances.isEmpty || !dynamicScaleScriptInstances.isEmpty
                 || !dynamicAnglesScriptInstances.isEmpty || !dynamicColorScriptInstances.isEmpty
                 || !effectConstantScriptInstances.isEmpty || !effectVisibilityScriptInstances.isEmpty
+                || !particleRateScriptInstances.isEmpty || !dynamicParallaxDepthScriptInstances.isEmpty
             return hasLayerWritingScripts ? livePresentationOverlay : WPEFrameOverlay()
         }
         // Sorted by objectID: these scripts cross-talk through shared state, so a
@@ -574,17 +610,6 @@ extension WPEMetalSceneRenderer {
                 transforms.scales[objectID] = scale
             }
         }
-        if audioDebugLogEnabled {
-            audioDiagCounter += 1
-            if audioDiagCounter % 120 == 2, let sample = transforms.scales.sorted(by: { $0.key < $1.key }).first {
-                Logger.notice(
-                    "[AudioCapture] scale scripts: instances=\(dynamicScaleScriptInstances.count)"
-                        + " published=\(transforms.scales.count)"
-                        + " \(sample.key)=\(String(format: "%.4f", sample.value.x))",
-                    category: .audioCapture
-                )
-            }
-        }
         applySharedReadFans(sharedScaleReadFans, into: &transforms.scales)
         transforms.angles.reserveCapacity(dynamicAnglesScriptInstances.count + sharedAnglesReadFans.count)
         for (objectID, instance) in dynamicAnglesScriptInstances.sorted(by: { $0.key < $1.key }) {
@@ -630,16 +655,34 @@ extension WPEMetalSceneRenderer {
                 }
             }
         }
+        if !dynamicParallaxDepthScriptInstances.isEmpty || !sharedParallaxReadFans.isEmpty {
+            applyEffectiveParallaxDepths()
+        }
         return transforms
     }
 
-    /// A bound `parallaxDepth` script's Vec2 becomes the layer's live depth; the
-    /// authored-depth map stays in sync so parallax hosts/particles agree.
+    /// Writes only the live depth tables; render depth is resolved per anchor in `applyEffectiveParallaxDepths`.
     private func applyScriptParallaxDepth(_ depth: SIMD2<Double>, objectID: String) {
         guard depth.x.isFinite, depth.y.isFinite else { return }
-        liveLayerPresentation[objectID, default: .init()].parallaxDepth = depth
         parallaxAuthoredDepthByObjectID[objectID] = depth
         executor.parallaxHostDepthByObjectID[objectID] = depth
+    }
+
+    /// A subtree moves by its anchor's depth alone, so a parented object's own scripted depth never renders.
+    private func applyEffectiveParallaxDepths() {
+        let effective = WPERenderGraphBuilder.effectiveParallaxDepths(
+            live: parallaxAuthoredDepthByObjectID,
+            parentByID: objectParentByID,
+            drivenBy: Set(dynamicParallaxDepthScriptInstances.keys).union(sharedParallaxReadFans.keys)
+        )
+        for (objectID, depth) in effective {
+            liveLayerPresentation[objectID, default: .init()].parallaxDepth = depth
+        }
+        for system in particleSystems {
+            if let objectID = system.scriptParticleObjectID, let depth = effective[objectID] {
+                system.parallaxDepth = depth
+            }
+        }
     }
 
     /// Swift fan-out for `return shared.K` scripts that never entered JS.

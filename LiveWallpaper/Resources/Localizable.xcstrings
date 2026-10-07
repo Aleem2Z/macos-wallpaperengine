@@ -4563,66 +4563,6 @@
         }
       }
     },
-    "Across %lld extracted video files" : {
-      "comment" : "WPE video texture cache footer. Placeholder is the file count.",
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "variations" : {
-            "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Across %lld extracted video file"
-                }
-              },
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Across %lld extracted video files"
-                }
-              }
-            }
-          }
-        },
-        "es" : {
-          "variations" : {
-            "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "En %lld archivo de vídeo extraído"
-                }
-              },
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "En %lld archivos de vídeo extraídos"
-                }
-              }
-            }
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "抽出済み動画ファイル %lld 件全体"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "共 %lld 个已提取视频文件"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "共 %lld 個已擷取影片檔案"
-          }
-        }
-      }
-    },
     "Action needed" : {
       "comment" : "Setup step status when the user must do something.",
       "extractionState" : "manual",
@@ -7515,42 +7455,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "作用於所有桌布網格。"
-          }
-        }
-      }
-    },
-    "Applies to every widget panel on every display." : {
-      "comment" : "Footer clarifying that overlay widget appearance is a global preference, not per-display.",
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Applies to every widget panel on every display."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Se aplica a todos los paneles de widgets en todas las pantallas."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "すべてのディスプレイのすべてのウィジェットパネルに適用されます。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "应用到所有显示器上的全部小组件。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "套用至所有顯示器上的所有小工具面板。"
           }
         }
       }
@@ -14408,42 +14312,6 @@
         }
       }
     },
-    "Clear Video Cache" : {
-      "comment" : "Destructive button title for clearing extracted scene video cache files.",
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Clear Video Cache"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Borrar caché de vídeo"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "動画キャッシュを消去"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "清除视频缓存"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "清除影片快取"
-          }
-        }
-      }
-    },
     "Clear Wallpaper" : {
       "comment" : "A title for a destructive action that clears the current wallpaper.",
       "extractionState" : "manual",
@@ -14616,42 +14484,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "清除下載佇列"
-          }
-        }
-      }
-    },
-    "Clear scene video texture cache?" : {
-      "comment" : "Confirmation dialog title for clearing the scene video texture cache on the Storage tab.",
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Clear scene video texture cache?"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "¿Borrar la caché de vídeo de las escenas?"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "シーン動画キャッシュを消去しますか？"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "清除场景视频缓存？"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "清除場景影片快取？"
           }
         }
       }
@@ -20694,42 +20526,6 @@
         }
       }
     },
-    "Deletes %@ of extracted scene video files. Scenes re-extract the video textures the next time they render." : {
-      "comment" : "Destructive confirm message. Placeholder is a formatted byte size.",
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Deletes %@ of extracted scene video files. Scenes re-extract the video textures the next time they render."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Elimina %@ de archivos de vídeo extraídos de las escenas. Las escenas volverán a extraer los vídeos la próxima vez que se rendericen."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "展開済みのシーン動画 %@ を削除します。次回描画時に動画が再展開されます。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "将删除 %@ 已提取的场景视频文件。场景下次渲染时会重新提取视频。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "將刪除 %@ 已擷取的場景影片檔案。場景下次渲染時會重新擷取影片。"
-          }
-        }
-      }
-    },
     "Deletes %@ scratch items · %@ created by test runs in the container's tmp folder. Nothing else reads them." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -22877,6 +22673,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "下載大小"
+          }
+        }
+      }
+    },
+    "Download the translation languages for Chinese and %@ to show Chinese wallpaper names, settings, and descriptions in %@." : {
+      "comment" : "Translate wallpaper text row. Both placeholders are the app language name, such as English.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Después de descargar los idiomas de traducción chino y %@, los nombres, los ajustes y las descripciones en chino de los fondos se mostrarán en %@."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "中国語と%@の翻訳言語をダウンロードすると、中国語の壁紙名、設定項目、説明が%@で表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载中文和%@的翻译语言后，中文的壁纸名称、设置项和描述将显示为%@。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下載中文和%@的翻譯語言後，中文的桌布名稱、設定項目和描述將顯示為%@。"
           }
         }
       }
@@ -27835,6 +27660,41 @@
         }
       }
     },
+    "Freed space could not be measured." : {
+      "comment" : "WPE cache management footer shown after a purge when a cleared cache could not be fully scanned, so no exact freed total exists.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Freed space could not be measured."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se ha podido medir el espacio liberado."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "解放された容量を計測できませんでした。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法计算已释放的空间。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法計算已釋放的空間。"
+          }
+        }
+      }
+    },
     "Frees graphics resources while paused. Some pages may resume blank." : {
       "comment" : "Optional pause compatibility detail. Blank refers to the wallpaper page after resuming.",
       "extractionState" : "manual",
@@ -32578,6 +32438,42 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "讓相容場景回應 Mac 上播放的音訊。預設關閉；需要錄音權限。"
+          }
+        }
+      }
+    },
+    "Library & Shelf" : {
+      "comment" : "Settings section header on the Appearance page: library tile size and wallpaper shelf options.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Library & Shelf"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Biblioteca y estante"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ライブラリと棚"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "壁纸库与壁纸架"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "桌布庫與桌布架"
           }
         }
       }
@@ -43031,41 +42927,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "其他顯示器"
-          }
-        }
-      }
-    },
-    "Other Items" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Other Items"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Otros elementos"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "その他の項目"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "其他项目"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "其他項目"
           }
         }
       }
@@ -66561,6 +66422,36 @@
         }
       }
     },
+    "The Workshop folder in your Steam library could not be read. Authorize your Steam library folder again, then check your subscriptions." : {
+      "comment" : "Subscription sync error when the Workshop content folder exists but cannot be read.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede leer la carpeta de Workshop de tu biblioteca de Steam. Vuelve a autorizar la carpeta de tu biblioteca de Steam y comprueba de nuevo tus suscripciones."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steam ライブラリ内のワークショップフォルダを読み取れません。Steam ライブラリフォルダを再度許可してから、サブスクリプションを確認してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取 Steam 库中的创意工坊文件夹。请重新授权 Steam 库文件夹，然后再检查订阅。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法讀取 Steam 收藏庫中的工作坊資料夾。請重新授權 Steam 收藏庫資料夾，然後再檢查訂閱。"
+          }
+        }
+      }
+    },
     "The archive contains a symbolic link that escapes the install directory: %@" : {
       "comment" : "Managed SteamCMD install error. Placeholder is the symlink path.",
       "extractionState" : "manual",
@@ -71641,6 +71532,35 @@
         }
       }
     },
+    "Translate wallpaper text" : {
+      "comment" : "Settings switch that translates Chinese wallpaper text, and offers the translation languages.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Traducir el texto de los fondos"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "壁紙のテキストを翻訳"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "翻译壁纸文字"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "翻譯桌布文字"
+          }
+        }
+      }
+    },
     "Translated shader source. Up to 64 MB per schema; scenes compile it again when needed." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -71666,6 +71586,41 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "轉譯後的著色器原始碼，每個格式版本上限 64 MB；場景需要時重新編譯。"
+          }
+        }
+      }
+    },
+    "Translates wallpaper titles, settings, and descriptions into the app language. Requires the matching translation languages, downloaded in System Settings." : {
+      "comment" : "Info for the Translate wallpaper text switch in General settings.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Translates wallpaper titles, settings, and descriptions into the app language. Requires the matching translation languages, downloaded in System Settings."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Traduce los títulos, los ajustes y las descripciones de los fondos al idioma de la app. Requiere descargar los idiomas de traducción correspondientes en Ajustes del Sistema."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "壁紙のタイトル、設定項目、説明などのテキストをアプリの言語に翻訳します。対応する翻訳言語をシステム設定でダウンロードしておく必要があります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将壁纸标题、设置项和介绍等文字翻译为 App 语言。需要先在系统设置中下载对应的翻译语言。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "將桌布標題、設定項目和介紹等文字翻譯為 App 語言。需要先在系統設定中下載對應的翻譯語言。"
           }
         }
       }
@@ -77287,6 +77242,42 @@
         }
       }
     },
+    "Window" : {
+      "comment" : "Settings section header on the Appearance page: app appearance and main window background.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Window"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ventana"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ウインドウ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "窗口"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "視窗"
+          }
+        }
+      }
+    },
     "Wired" : {
       "comment" : "Memory breakdown segment: wired memory.",
       "extractionState" : "manual",
@@ -81469,42 +81460,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "需要你"
-          }
-        }
-      }
-    },
-    "next day" : {
-      "comment" : "Suffix appended to a schedule end-time when the slot wraps past midnight.",
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "next day"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "día siguiente"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "翌日"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "次日"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "隔日"
           }
         }
       }

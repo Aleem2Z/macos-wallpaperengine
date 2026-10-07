@@ -778,12 +778,19 @@ enum SteamDirectorySize {
         var total: UInt64 = 0
         var visited = 0
         var pending = [root.path(percentEncoded: false)]
-        while let directory = pending.popLast() {
+        while visited < entryLimit, let directory = pending.popLast() {
             var info = stat()
             guard lstat(directory, &info) == 0, info.st_mode & S_IFMT == S_IFDIR,
-                  let names = try? FileManager.default.contentsOfDirectory(atPath: directory) else { continue }
-            for name in names {
-                guard visited < entryLimit else { return total }
+                  let stream = opendir(directory) else { continue }
+            defer { closedir(stream) }
+            while visited < entryLimit, let entry = readdir(stream) {
+                let length = Int(entry.pointee.d_namlen)
+                let name = withUnsafePointer(to: entry.pointee.d_name) {
+                    $0.withMemoryRebound(to: CChar.self, capacity: length) {
+                        FileManager.default.string(withFileSystemRepresentation: $0, length: length)
+                    }
+                }
+                guard name != ".", name != ".." else { continue }
                 visited += 1
                 let path = (directory as NSString).appendingPathComponent(name)
                 guard lstat(path, &info) == 0 else { continue }
@@ -1124,7 +1131,7 @@ enum SteamAccountsFile {
     }
 
     /// Contents of the next balanced `{ … }`, advancing `cursor` past its close.
-    /// Quoted spans are skipped so a brace inside a value can't unbalance it.
+    /// Quoted spans and `//` line comments are skipped so a brace inside either can't unbalance it.
     static func nextBraceBlock(in text: Substring, from cursor: inout Substring.Index) -> Substring? {
         guard let open = text[cursor...].firstIndex(of: "{") else { return nil }
         var depth = 0
@@ -1140,6 +1147,9 @@ enum SteamAccountsFile {
                 if character == "\"" { insideQuotes = false }
             } else if character == "\"" {
                 insideQuotes = true
+            } else if character == "/", text[index...].hasPrefix("//") {
+                index = text[index...].firstIndex(where: \.isNewline) ?? text.endIndex
+                continue
             } else if character == "{" {
                 depth += 1
             } else if character == "}" {
@@ -1193,16 +1203,68 @@ enum SteamWorkshopManifest {
 
     /// Item ids under `WorkshopItemsInstalled` of `appworkshop_<appid>.acf`; nil when that block is missing or incomplete.
     static func installedIDs(fromACF text: String) -> Set<String>? {
-        guard let key = text.range(of: "\"WorkshopItemsInstalled\"", options: .caseInsensitive) else { return nil }
-        var cursor = key.upperBound
-        guard let block = SteamAccountsFile.nextBraceBlock(in: text[...], from: &cursor) else { return nil }
+        guard let block = installedBlock(in: text[...]) else { return nil }
         var ids: Set<String> = []
         var entryCursor = block.startIndex
-        while let id = SteamAccountsFile.nextQuoted(in: block, from: &entryCursor) {
-            guard SteamAccountsFile.nextBraceBlock(in: block, from: &entryCursor) != nil else { return nil }
+        // Any token outside `"<digits>" { … }` fails the whole set: it authorizes deleting library records.
+        while skipTrivia(in: block, from: &entryCursor) {
+            guard block[entryCursor] == "\"",
+                  let id = SteamAccountsFile.nextQuoted(in: block, from: &entryCursor),
+                  !id.isEmpty, id.allSatisfy({ $0.isASCII && $0.isNumber }),
+                  skipTrivia(in: block, from: &entryCursor), block[entryCursor] == "{",
+                  SteamAccountsFile.nextBraceBlock(in: block, from: &entryCursor) != nil else { return nil }
             ids.insert(id)
         }
         return ids
+    }
+
+    /// The block of the one `"WorkshopItemsInstalled"` key directly under the root, matched as a key token rather than inside a
+    /// comment or as a value; nil unless the whole text is balanced key/value pairs holding that key there once and nowhere deeper.
+    private static func installedBlock(in text: Substring) -> Substring? {
+        var cursor = text.startIndex
+        var depth = 0
+        var expectsKey = true
+        var installed: Substring?
+        while skipTrivia(in: text, from: &cursor) {
+            switch text[cursor] {
+            case "\"":
+                guard let token = SteamAccountsFile.nextQuoted(in: text, from: &cursor) else { return nil }
+                if expectsKey, token.caseInsensitiveCompare("WorkshopItemsInstalled") == .orderedSame {
+                    guard depth == 1, installed == nil, skipTrivia(in: text, from: &cursor), text[cursor] == "{",
+                          let block = SteamAccountsFile.nextBraceBlock(in: text, from: &cursor) else { return nil }
+                    installed = block
+                } else {
+                    expectsKey.toggle()
+                }
+            case "{":
+                guard !expectsKey else { return nil }
+                depth += 1
+                expectsKey = true
+                cursor = text.index(after: cursor)
+            case "}":
+                guard expectsKey, depth > 0 else { return nil }
+                depth -= 1
+                cursor = text.index(after: cursor)
+            default:
+                return nil
+            }
+        }
+        return depth == 0 && expectsKey ? installed : nil
+    }
+
+    /// Advances past whitespace and `//` line comments; false once `text` is exhausted.
+    private static func skipTrivia(in text: Substring, from cursor: inout Substring.Index) -> Bool {
+        while cursor < text.endIndex {
+            if text[cursor].isWhitespace {
+                cursor = text.index(after: cursor)
+            } else if text[cursor...].hasPrefix("//") {
+                // `\r\n` is one Character, so matching "\n" alone would swallow the rest of the block.
+                cursor = text[cursor...].firstIndex(where: \.isNewline) ?? text.endIndex
+            } else {
+                return true
+            }
+        }
+        return false
     }
 }
 

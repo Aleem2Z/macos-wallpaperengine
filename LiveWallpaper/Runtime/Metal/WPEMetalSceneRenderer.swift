@@ -102,8 +102,6 @@ final class WPEMetalSceneRenderer: NSObject {
     var textFontResolver: WPETextFontResolver?
     var textLayoutCache: [String: WPETextLayoutCacheEntry] = [:]
     var soundRuntime: WPESoundRuntime?
-    let audioDebugLogEnabled = UserDefaults.standard.bool(forKey: "WPEAudioDebugLog")
-    var audioDiagCounter = 0
     var textScriptInstances: [String: WPESceneScriptInstance] = [:]
     var layerScriptInstances: [String: WPELayerScriptInstance] = [:] {
         didSet { cachedInstalledScriptLayerIDs = nil }
@@ -227,6 +225,8 @@ final class WPEMetalSceneRenderer: NSObject {
     var transformHostLocalTransformsByID: [String: WPERenderObjectTransform] = [:]
     /// Kept separate from the transform-host map so particle host offsets keep reading transform hosts only.
     var layerAncestorLocalTransformsByID: [String: WPERenderObjectTransform] = [:]
+    /// Lighting-only superset of the ancestor map: drawn layers would otherwise start composing through text and particle parents.
+    var lightingLocalTransformsByID: [String: WPERenderObjectTransform] = [:]
     /// Video source key for `getVideoTexture()`. Populated for ALL video layers, not just scripted ones.
     var layerVideoSourceKey: [String: String] = [:]
     var layerObjectIDByName: [String: String] = [:]
@@ -576,7 +576,6 @@ final class WPEMetalSceneRenderer: NSObject {
         return WPECameraParallaxFrame.defaultGain
     }
 
-    var hoverDebugCounter = 0
 
     deinit {
         for observer in sceneScriptLanguageObservers {

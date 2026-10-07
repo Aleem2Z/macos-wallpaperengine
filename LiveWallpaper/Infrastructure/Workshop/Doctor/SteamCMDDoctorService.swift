@@ -157,7 +157,7 @@ final class SteamCMDDoctorService {
             folder.appendPathComponent(workshopID, isDirectory: true)
             guard fileManager.fileExists(atPath: folder.path(percentEncoded: false)) else { return nil }
             return try? folder.bookmarkData(
-                options: [.withSecurityScope],
+                options: SecurityScopedBookmarkResolver.creationOptions([.withSecurityScope]),
                 includingResourceValuesForKeys: nil,
                 relativeTo: nil
             )
@@ -785,9 +785,9 @@ final class SteamCMDDoctorService {
 
     private func runWorkingDirectoryProbe() {
         do {
-            let workdir = try resolveWorkdirURL()
-            let didStart = workdir.startAccessingSecurityScopedResource()
-            defer { if didStart { workdir.stopAccessingSecurityScopedResource() } }
+            let access = try beginWorkdirAccess()
+            defer { access.end() }
+            let workdir = access.url
 
             var isDirectory = ObjCBool(false)
             guard fileManager.fileExists(atPath: workdir.path(percentEncoded: false), isDirectory: &isDirectory),
@@ -1162,11 +1162,7 @@ final class SteamCMDDoctorService {
         !Task.isCancelled && accountGeneration == generation && defaultsRevision == bindingRevision
     }
 
-    /// `whileLibraryOpen` gets the Steam root while its sandbox access is still open; not called when the library is unreachable.
-    func enumerateDownloadedItemFolders(
-        _ body: @MainActor (URL) async -> Void,
-        whileLibraryOpen: @MainActor (URL) -> Void = { _ in }
-    ) async {
+    func enumerateDownloadedItemFolders(_ body: @MainActor (URL) async -> Void) async {
         var seen = Set<String>()
         let inventory = workshopFileInventory
 
@@ -1193,7 +1189,6 @@ final class SteamCMDDoctorService {
                 consumedIDs.append(project.lastPathComponent)
                 await body(project)
             }
-            whileLibraryOpen(workdir)
             seen.formUnion(consumedIDs)
         }
     }
@@ -1376,7 +1371,8 @@ final class SteamCMDDoctorService {
     struct WorkdirAccess {
         let url: URL
         let isOpen: Bool
-        private let scopedURL: URL
+        /// The resolved URL itself; `url` is a derived copy that cannot open the scope.
+        let scopedURL: URL
 
         init(url: URL, scopedURL: URL) {
             self.url = url
@@ -1447,9 +1443,9 @@ final class SteamCMDDoctorService {
 
     private static func makeBookmark(for url: URL, readOnly: Bool) throws -> Data {
         do {
-            let options: URL.BookmarkCreationOptions = readOnly
-                ? [.withSecurityScope, .securityScopeAllowOnlyReadAccess]
-                : [.withSecurityScope]
+            let options = SecurityScopedBookmarkResolver.creationOptions(
+                readOnly ? [.withSecurityScope, .securityScopeAllowOnlyReadAccess] : [.withSecurityScope]
+            )
             return try SecurityScopedBookmarkResolver.withScopedAccess(url) { _ in
                 try url.bookmarkData(options: options, includingResourceValuesForKeys: nil, relativeTo: nil)
             }

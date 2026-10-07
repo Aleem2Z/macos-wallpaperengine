@@ -906,12 +906,7 @@ final class WPEMetalRenderExecutor {
             diagnostics.sceneAliasDirectBinds = frameState.sceneAliasDirectBinds
         }
         currentSceneSize = size
-        groupingContainerObjectIDs = preparedPipeline.layers.reduce(into: Set<String>()) { parents, layer in
-            guard let parentID = layer.graphLayer.parentObjectID,
-                  layer.graphLayer.passes.contains(where: { $0.target == .scene })
-            else { return }
-            parents.insert(parentID)
-        }
+        groupingContainerObjectIDs = validatedFBOAliasTopology(for: preparedPipeline).groupingContainerObjectIDs
         parallaxRootCenterByObjectID = Self.parallaxRootCenters(
             for: preparedPipeline.layers.lazy.map(\.graphLayer),
             sceneSize: size,
@@ -2901,8 +2896,6 @@ final class WPEMetalRenderExecutor {
     }
     #endif
 
-    private static let imageUniformDebugEnabled = UserDefaults.standard.bool(forKey: "WPEImageUniformDebugLog")
-    private static let loggedImageUniformNames = OSAllocatedUnfairLock<Set<String>>(initialState: [])
 
     func genericImageUniforms(
         for pass: WPEPreparedRenderPass,
@@ -2910,10 +2903,27 @@ final class WPEMetalRenderExecutor {
         hasMask: Bool,
         sourceTexture: MTLTexture? = nil,
         maskTexture: MTLTexture? = nil,
+        materialConstants: [String: WPESceneShaderConstantValue]? = nil,
         spriteDescriptor: WPETexSpriteSamplingDescriptor? = nil
     ) -> WPEGenericImageUniforms {
+        // A submesh's own material replaces the layer's resolved values wholesale; absent names take shader defaults.
+        let own = materialConstants.map { constants in
+            constants.reduce(into: constants) { $0[pass.materialUniformNames[$1.key] ?? $1.key] = $1.value }
+        }
+        func ownScalar(_ names: [String], _ lookup: (String) -> WPESceneShaderConstantValue?) -> Float {
+            names.compactMap { lookup($0)?.numberValue }.first.map(Float.init) ?? 1
+        }
+        let alphaNames = ["g_Alpha", "u_Alpha", "alpha"]
+        let brightnessNames = ["g_Brightness", "u_Brightness", "brightness"]
         // WPE bakes the object's authored `color` into g_Color4 for every image material, so the layer tint multiplies the material's own g_Color — same channel the brightness field already rides.
-        let materialColor = WPEMetalShaderInputs.colorVector(for: pass)
+        let materialColor: SIMD4<Float> = if let own {
+            SIMD4<Float>((0 ..< 4).map { channel -> Float in
+                let vector = own["g_Color"]?.vectorValue ?? []
+                return channel < vector.count ? Float(vector[channel]) : 1
+            })
+        } else {
+            WPEMetalShaderInputs.colorVector(for: pass)
+        }
         let layerTint = SIMD3<Float>(layer.geometry.color)
         let color = SIMD4<Float>(
             materialColor.x * layerTint.x,
@@ -2921,13 +2931,16 @@ final class WPEMetalRenderExecutor {
             materialColor.z * layerTint.z,
             materialColor.w
         )
-        let gAlpha = WPEMetalShaderInputs.floatScalar(named: ["g_Alpha", "u_Alpha", "alpha"], in: pass, default: 1)
-        let gBrightness = WPEMetalShaderInputs.floatScalar(
-            named: ["g_Brightness", "u_Brightness", "brightness"],
-            in: pass,
-            frame: frameUniformContext,
-            default: 1
-        )
+        let gAlpha: Float = if let own {
+            ownScalar(alphaNames) { own[$0] }
+        } else {
+            WPEMetalShaderInputs.floatScalar(named: alphaNames, in: pass, default: 1)
+        }
+        let gBrightness: Float = if let own {
+            ownScalar(brightnessNames) { self.frameUniformContext.frameValue(named: $0) ?? own[$0] }
+        } else {
+            WPEMetalShaderInputs.floatScalar(named: brightnessNames, in: pass, frame: frameUniformContext, default: 1)
+        }
         let alpha = gAlpha * Float(layer.geometry.alpha)
         // WPE g_Color4 bakes object brightness only in HDR scenes. The
         // material's explicit g_Brightness remains a separate shader input.
@@ -2953,26 +2966,6 @@ final class WPEMetalRenderExecutor {
             spriteTranslation = SIMD4<Float>(spriteDescriptor.translation.x, spriteDescriptor.translation.y, 1, 0)
             // TEXS already maps the whole quad into physical atlas space.
             sourceUVScale = SIMD2<Float>(repeating: 1)
-        }
-        if WPESceneDebugArtifacts.shared.isEnabled {
-            WPESceneDebugArtifacts.shared.appendLog(
-                "[imageUniform] layer=\(layer.objectName) id=\(layer.objectID) shader=\(pass.pass.shader) "
-                    + "color=(\(color.x),\(color.y),\(color.z),\(color.w)) "
-                    + "gAlpha=\(gAlpha) layerAlpha=\(layer.geometry.alpha) alpha=\(alpha) "
-                    + "gBrightness=\(gBrightness) layerBrightness=\(layer.geometry.brightness) brightness=\(brightness) "
-                    + "hasMask=\(hasMask) "
-                    + "uvScale0=(\(sourceUVScale.x),\(sourceUVScale.y)) "
-                    + "uvScale1=(\(maskUVScale.x),\(maskUVScale.y))",
-                level: .notice
-            )
-        }
-        // genericimage shaders do `rgb = sampled.rgb * color.rgb * brightness`, so brightness==0 OR color==0 blacks out the layer while alpha (a separate term) survives.
-        if Self.imageUniformDebugEnabled,
-           Self.loggedImageUniformNames.withLock({ $0.insert(layer.objectName).inserted }) {
-            Logger.notice(
-                "[ImgUniform] \(layer.objectName) shader=\(pass.pass.shader) g_Brightness=\(gBrightness) layerBright=\(layer.geometry.brightness) → brightness=\(brightness) color=(\(color.x),\(color.y),\(color.z)) alpha=\(alpha)",
-                category: .wpeRender
-            )
         }
         return WPEGenericImageUniforms(
             color: color,

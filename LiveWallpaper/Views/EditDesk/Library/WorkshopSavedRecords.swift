@@ -11,8 +11,11 @@ enum WorkshopSavedRecords {
     }
 
     static func remove(
-        workshopID: String, bookmarks: BookmarkStore = .shared, libraryBookmarks: LibraryBookmarkStore = .shared
+        workshopID: String, bookmarks: BookmarkStore = .shared, libraryBookmarks: LibraryBookmarkStore = .shared,
+        history: @MainActor () -> [WPEHistoryEntry] = { SettingsManager.shared.loadGlobalSettings().recentWPEImports }
     ) {
+        // Records are keyed by Workshop id, so a remaining copy of the same id still owns them.
+        guard !history().contains(where: { $0.origin.workshopID == workshopID }) else { return }
         // removeWPEBookmarks also drops the item's saved variants; their marks go with them.
         let before = Set(bookmarks.bookmarks.map(\.id))
         bookmarks.removeWPEBookmarks(workshopID: workshopID)
@@ -25,11 +28,12 @@ enum WorkshopSavedRecords {
     /// `removeImport`, then the entry's saved records once it removed the history entry.
     static func removingImport(
         bookmarks: BookmarkStore = .shared, libraryBookmarks: LibraryBookmarkStore = .shared,
+        history: @escaping @MainActor () -> [WPEHistoryEntry] = { SettingsManager.shared.loadGlobalSettings().recentWPEImports },
         _ removeImport: @escaping @MainActor (WPEHistoryEntry) -> Bool
     ) -> @MainActor (WPEHistoryEntry) -> Bool {
         { entry in
             guard removeImport(entry) else { return false }
-            remove(workshopID: entry.origin.workshopID, bookmarks: bookmarks, libraryBookmarks: libraryBookmarks)
+            remove(workshopID: entry.origin.workshopID, bookmarks: bookmarks, libraryBookmarks: libraryBookmarks, history: history)
             return true
         }
     }

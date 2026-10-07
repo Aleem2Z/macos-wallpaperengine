@@ -164,7 +164,7 @@ struct HomePage: View {
             content
                 .onChange(of: page.library?.visibleItems) { page.syncShelf() }
                 #if !LITE_BUILD
-                .onChange(of: WPEPropertyLabelTranslator.wallpaperNames.translated) { page.syncShelf() }
+                .onChange(of: WPEPropertyLabelTranslator.wallpaperNames.revision) { page.refreshWallpaperNames() }
                 #endif
                 // State refreshes rewrite `stage.displays` without rebuilding the cards, whose capsules wave by it.
                 .onChange(of: page.drawingDisplayIDs) { page.syncShelf() }
@@ -1144,6 +1144,14 @@ struct HomePage: View {
         }
     }
 
+    /// Not `refreshAllStates()`: that also starts a cover capture for a display still missing one.
+    private func refreshWallpaperNames() {
+        syncShelf()
+        for display in stage.displays {
+            refreshState(for: display.id)
+        }
+    }
+
     private func refreshState(for id: CGDirectDisplayID) {
         guard let screen = screenManager.screens.first(where: { $0.id == id }),
               let index = stage.displays.firstIndex(where: { $0.id == id }) else { return }
@@ -1169,13 +1177,17 @@ struct HomePage: View {
             nil
         }
         display.wallpaperKind = DisplayDetailHost.kindLine(configuration.activeWallpaper)
-        display.wallpaperTitle = StageWallpaperName.resolve(
+        let title = StageWallpaperName.resolve(
             libraryTitle: libraryTitle(for: configuration),
             originTitle: configuration.wpeOrigin?.title,
             fileURL: configuration.wallpaperType == .video ? screen.videoPlayer?.videoURL : nil,
             host: host,
             kind: display.wallpaperKind
         )
+        #if !LITE_BUILD
+        WPEPropertyLabelTranslator.wallpaperNames.enqueue(labels: [title], persist: true)
+        #endif
+        display.wallpaperTitle = title.translatedWallpaperName
         // The same guards `WallpaperAutomationOrchestrator.advancePlaylist` runs: a button the
         // orchestrator would refuse is drawn dimmed rather than looking live.
         display.showsPlaylistControls = featureCatalog.isEnabled(.playlists) && configuration.canNavigatePlaylist
@@ -1333,7 +1345,9 @@ struct HomePage: View {
         guard let library else { return }
         let visible = library.visibleItems
         #if !LITE_BUILD
-        WPEPropertyLabelTranslator.wallpaperNames.enqueue(labels: visible.map(\.title))
+        // `items`, not `visible`: a chip, filter or search would otherwise prune the rows it hides.
+        WPEPropertyLabelTranslator.wallpaperNames.retainPersisted(Set(library.items.map(\.title)))
+        WPEPropertyLabelTranslator.wallpaperNames.enqueue(labels: visible.map(\.title), persist: true)
         #endif
         let scale = NSScreen.main?.backingScaleFactor ?? 2
         stage.shelfRenderBudget = shelfCapacity
@@ -1863,7 +1877,7 @@ struct LibraryGridTile: View {
                     .font(DesignTokens.EditDesk.Typography.cardTitle)
                     .foregroundStyle(DesignTokens.Colors.overlayForeground)
                     .lineLimit(1)
-                    .help(Text(verbatim: item.title))
+                    .wpeAuthorLabelHelp(item.title.wallpaperNameHelp)
                 if let status = item.statusBadge {
                     Text(verbatim: status)
                         .font(DesignTokens.EditDesk.Typography.metaMono)
@@ -1898,7 +1912,7 @@ struct LibraryGridTile: View {
             preview?.settle(item.id, hovering: $0)
         }
         .accessibilityLabel(Text(verbatim: item.title.translatedWallpaperName))
-        .wpeTranslateWallpaperName(item.title)
+        .wpeTranslateWallpaperName(item.title, persist: true)
         // LazyVGrid may keep a scrolled-away tile alive, and any image the tile holds with it.
         .onAppear {
             // Bumped on the way back rather than on the way out, so the id never changes off screen.

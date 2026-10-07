@@ -29,32 +29,27 @@ struct WPEStorageInventory: Sendable {
     struct ScanRoots: Sendable {
         let steamRoot: URL?
         let engineAssetsRoot: URL?
+
+        /// `engineRoot` is the folder holding `assets/`; an assets-only grant does not cover the rest of it.
+        static func linked(steamRoot: URL?, engineRoot: URL?) -> ScanRoots {
+            ScanRoots(steamRoot: steamRoot, engineAssetsRoot: engineRoot?.appendingPathComponent("assets", isDirectory: true))
+        }
     }
 
     @MainActor
     static func compute(doctor: SteamCMDDoctorService) async -> WPEStorageInventory {
-        let steamRoot = try? doctor.resolveWorkdirURL()
-        let engineAssetsRoot = WPEEngineAssetsLibrary.shared.resolveAuthorizedRoot()
-        let steamScopeRoot = doctor.workdirBookmarkData.flatMap { bookmark in
-            try? SecurityScopedBookmarkResolver.shared.resolve(bookmark, target: .transient).get().url
-        } ?? steamRoot
-        let steamScope = steamScopeRoot?.startAccessingSecurityScopedResource() ?? false
-        let assetsScopeRoot = SettingsManager.shared.loadWPEEngineAssetsBookmark().flatMap { bookmark in
-            try? SecurityScopedBookmarkResolver.shared.resolve(bookmark, target: .transient).get().url
-        } ?? engineAssetsRoot
-        let assetsScope = assetsScopeRoot?.startAccessingSecurityScopedResource() ?? false
+        let steamAccess = try? doctor.beginWorkdirAccess()
+        let steamRoot = steamAccess?.url
+        let assetsAccess = WPEEngineAssetsLibrary.shared.beginAuthorizedRootAccess()
+        let steamScopeRoot = steamAccess?.scopedURL
         defer {
-            if steamScope {
-                steamScopeRoot?.stopAccessingSecurityScopedResource()
-            }
-            if assetsScope {
-                assetsScopeRoot?.stopAccessingSecurityScopedResource()
-            }
+            steamAccess?.end()
+            assetsAccess?.end()
         }
         var inventory = await WPEStorageInventoryScanner.shared.scan(
-            roots: ScanRoots(steamRoot: steamRoot, engineAssetsRoot: engineAssetsRoot)
+            roots: .linked(steamRoot: steamRoot, engineRoot: assetsAccess?.root)
         )
-        inventory.engineAssetsScopeRootURL = assetsScopeRoot
+        inventory.engineAssetsScopeRootURL = assetsAccess?.scopedURL
         inventory.projectsScopeRootURL = steamScopeRoot
         return inventory
     }
@@ -72,21 +67,25 @@ actor WPEStorageInventoryScanner {
         budget: Int = WPEStoragePaths.defaultWalkBudget
     ) -> WPEStorageInventory {
         // A budget PER ROOT, not one shared across both: a shared counter let whichever ran first spend it all and report the other as empty.
+        var complete = true
         var assetsVisited = 0
         let (assetsBytes, assetsURL) = scanEngineAssets(
             root: roots.engineAssetsRoot,
             budget: budget,
-            visited: &assetsVisited
+            visited: &assetsVisited,
+            complete: &complete
         )
         var projectsVisited = 0
         let (projects, root) = scanProjects(
             steamRoot: roots.steamRoot,
             budget: budget,
-            visited: &projectsVisited
+            visited: &projectsVisited,
+            complete: &complete
         )
-        if assetsVisited >= budget || projectsVisited >= budget {
+        let isIncomplete = !complete || assetsVisited >= budget || projectsVisited >= budget
+        if isIncomplete {
             Logger.warning(
-                "Storage inventory stopped at its \(budget)-entry budget; reported sizes are lower bounds",
+                "Storage inventory stopped early or hit unreadable entries (budget \(budget)); reported sizes are lower bounds",
                 category: .fileAccess
             )
         }
@@ -97,40 +96,58 @@ actor WPEStorageInventoryScanner {
             projectsScopeRootURL: roots.steamRoot,
             engineAssetsBytes: assetsBytes,
             engineAssetsURL: assetsURL,
-            isIncomplete: assetsVisited >= budget || projectsVisited >= budget
+            isIncomplete: isIncomplete
         )
     }
 
     private func scanProjects(
         steamRoot: URL?,
         budget: Int,
-        visited: inout Int
+        visited: inout Int,
+        complete: inout Bool
     ) -> ([WPEStorageInventory.ProjectEntry], URL?) {
         guard let steamRoot else { return ([], nil) }
         let root = steamRoot.appendingPathComponent(
             "steamapps/workshop/content/\(SteamCMDDoctorService.wallpaperEngineAppID)",
             isDirectory: true
         )
-        guard let children = try? fileManager.contentsOfDirectory(
-            at: root,
-            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
-            options: [.skipsHiddenFiles]
-        ) else { return ([], nil) }
+        let children: [URL]
+        do {
+            children = try fileManager.contentsOfDirectory(
+                at: root,
+                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+                options: [.skipsHiddenFiles]
+            )
+        } catch {
+            let cocoa = error as NSError
+            let missing = cocoa.domain == NSCocoaErrorDomain && cocoa.code == NSFileReadNoSuchFileError
+            // A reachable library without the content folder has simply downloaded nothing yet.
+            if !missing || (try? steamRoot.checkResourceIsReachable()) != true {
+                complete = false
+            }
+            return ([], nil)
+        }
 
         var entries: [WPEStorageInventory.ProjectEntry] = []
         for child in children {
-            guard !Task.isCancelled, visited < budget else { break }
+            guard !Task.isCancelled, visited < budget else {
+                complete = false
+                break
+            }
             let id = child.lastPathComponent
+            guard WPEPathSafety.isSafeProjectID(id) else { continue }
+            guard let values = try? child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else {
+                complete = false
+                continue
+            }
             // A symlinked id folder could point anywhere; refuse to walk it.
-            let values = try? child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-            guard WPEPathSafety.isSafeProjectID(id),
-                  values?.isDirectory == true,
-                  values?.isSymbolicLink != true else { continue }
+            guard values.isDirectory == true, values.isSymbolicLink != true else { continue }
             let bytes = WPEStoragePaths.allocatedBytes(
                 at: child,
                 fileManager: fileManager,
                 budget: budget,
-                visited: &visited
+                visited: &visited,
+                complete: &complete
             )
             guard bytes > 0 else { continue }
             entries.append(
@@ -143,15 +160,20 @@ actor WPEStorageInventoryScanner {
     private func scanEngineAssets(
         root: URL?,
         budget: Int,
-        visited: inout Int
+        visited: inout Int,
+        complete: inout Bool
     ) -> (UInt64, URL?) {
-        guard let root,
-              fileManager.fileExists(atPath: root.path(percentEncoded: false)) else { return (0, nil) }
+        guard let root else { return (0, nil) }
+        guard fileManager.fileExists(atPath: root.path(percentEncoded: false)) else {
+            complete = false
+            return (0, nil)
+        }
         let bytes = WPEStoragePaths.allocatedBytes(
             at: root,
             fileManager: fileManager,
             budget: budget,
-            visited: &visited
+            visited: &visited,
+            complete: &complete
         )
         return bytes > 0 ? (bytes, root) : (0, nil)
     }

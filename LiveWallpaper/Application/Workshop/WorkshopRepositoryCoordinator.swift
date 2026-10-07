@@ -17,13 +17,16 @@ final class WorkshopRepositoryCoordinator {
     static let shared = WorkshopRepositoryCoordinator()
 
     private var mutationTokens: [String: UUID] = [:]
+    /// Bumped as each mutation starts, so a reader can tell one began and ended while it was away.
+    private(set) var mutationEpoch: UInt64 = 0
 
-    #if DEBUG
-    // Test-only introspection; no production reader.
+    var hasActiveMutations: Bool {
+        !mutationTokens.isEmpty
+    }
+
     func isMutating(workshopID: String) -> Bool {
         mutationTokens[workshopID] != nil
     }
-    #endif
 
     func withExclusiveMutation<Result: Sendable>(
         workshopID: String,
@@ -35,6 +38,7 @@ final class WorkshopRepositoryCoordinator {
 
         let token = UUID()
         mutationTokens[workshopID] = token
+        mutationEpoch &+= 1
         NotificationCenter.default.post(
             name: .workshopItemWillMutate,
             object: self,

@@ -106,6 +106,8 @@ final class SceneWallpaperSession: WallpaperRuntimeSession, WallpaperPlaybackCon
     private var cleanupTask: Task<Void, Never>?
     private var diagnosticPollTask: Task<Void, Never>?
     private let diagnosticSessionID = UUID()
+    /// nil until a renderer poll has recorded a testing-report entry.
+    private(set) var lastRecordedDiagnosticAttempt: WPESceneTestingReports.Attempt?
     private var lifecycleGeneration = 0
     /// Guards clearing loadTask so a finished older task cannot drop a newer one.
     private var loadGeneration = 0
@@ -225,15 +227,18 @@ final class SceneWallpaperSession: WallpaperRuntimeSession, WallpaperPlaybackCon
             gpuErrors: .init(count: snapshot.gpuErrorCount, last: snapshot.gpuErrorLast),
             compatibilitySummary: snapshot.compatibilitySummary
         )
-        if let descriptor = snapshot.descriptor {
+        // The renderer's own generation also advances on retire/hibernate, so attempts count session loads instead.
+        if !isHibernated, let descriptor = snapshot.descriptor {
             let status = loadError.map { "load failed: \($0.errorDescription ?? "unknown")" }
                 ?? (snapshot.failedPresentGeneration == snapshot.currentLoadGeneration
                     ? "presentation failed"
                     : (snapshot.hasPresentedFrame ? "frame presented" : "awaiting first frame"))
+            let attempt = WPESceneTestingReports.Attempt(session: diagnosticSessionID, generation: loadGeneration)
             WPESceneTestingReports.shared.record(
-                attempt: .init(session: diagnosticSessionID, generation: snapshot.currentLoadGeneration),
+                attempt: attempt,
                 descriptor: descriptor, status: status, diagnostics: rendererDiagnostics
             )
+            lastRecordedDiagnosticAttempt = attempt
         }
     }
 
@@ -241,7 +246,7 @@ final class SceneWallpaperSession: WallpaperRuntimeSession, WallpaperPlaybackCon
         guard hasRenderer, diagnosticPollTask == nil else { return }
         diagnosticPollTask = Task { [weak self] in
             while !Task.isCancelled {
-                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                do { try await Task.sleep(for: .seconds(3)) } catch { return }
                 guard let self, hasRenderer else { return }
                 await pollRendererState()
             }
@@ -674,6 +679,8 @@ final class SceneWallpaperSession: WallpaperRuntimeSession, WallpaperPlaybackCon
         } catch is CancellationError {
             return
         } catch let error as SceneRenderingError {
+            // Before `loadError` publishes: preparation stops polling once it is set, so this is the failure's only diagnostics read.
+            await pollRendererState()
             guard !Task.isCancelled else { return }
             requiresSystemAudioCapture = false
             reconcileSystemAudioCaptureDemand()
@@ -684,6 +691,7 @@ final class SceneWallpaperSession: WallpaperRuntimeSession, WallpaperPlaybackCon
             loadFailureCause = SceneFailureCause.make(error)
             loadError = error
         } catch {
+            await pollRendererState()
             guard !Task.isCancelled else { return }
             requiresSystemAudioCapture = false
             reconcileSystemAudioCaptureDemand()

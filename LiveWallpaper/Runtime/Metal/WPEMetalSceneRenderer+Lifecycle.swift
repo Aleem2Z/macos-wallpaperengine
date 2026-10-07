@@ -75,7 +75,6 @@ extension WPEMetalSceneRenderer {
         // Retire only after destroy() has synchronously released JSC callbacks; late queued completions would still run.
         sceneScriptLoadState.retireCurrent()
         loadDiagnostics = nil
-        resolutionTracer.reset()
         releaseDynamicTextureSources()
         particleIndependentSystems.removeAll()
         particleInstanceCoordinator = nil
@@ -94,6 +93,7 @@ extension WPEMetalSceneRenderer {
         releaseTextTargets()
         transformHostLocalTransformsByID.removeAll(keepingCapacity: false)
         layerAncestorLocalTransformsByID.removeAll(keepingCapacity: false)
+        lightingLocalTransformsByID.removeAll(keepingCapacity: false)
         sceneLightObjects.removeAll(keepingCapacity: false)
         lastFrameDirectionalLighting = .empty
         onDemandVideoKeyByID.removeAll(keepingCapacity: false)
@@ -331,6 +331,7 @@ extension WPEMetalSceneRenderer {
                     let frame = try renderCurrentFrame(inputs: makeFrameInputs())
                     outputTexture = frame
                     outputFrameProduction = latestFrameProduction
+                    if plan.cameraParallax != nil { pushPointerEventMonitoring() }
                     applySoundPropertyUpdates(plan)
                     surfaceControl.drawImmediately()
                     return true
@@ -343,6 +344,7 @@ extension WPEMetalSceneRenderer {
                 }
             }
         }
+        if plan.cameraParallax != nil { pushPointerEventMonitoring() }
         applySoundPropertyUpdates(plan)
         surfaceControl.setNeedsRedraw()
         return true
@@ -875,6 +877,7 @@ extension WPEMetalSceneRenderer {
         releaseTextTargets()
         transformHostLocalTransformsByID.removeAll(keepingCapacity: false)
         layerAncestorLocalTransformsByID.removeAll(keepingCapacity: false)
+        lightingLocalTransformsByID.removeAll(keepingCapacity: false)
         sceneLightObjects.removeAll(keepingCapacity: false)
         lastFrameDirectionalLighting = .empty
         onDemandVideoKeyByID.removeAll(keepingCapacity: false)

@@ -73,6 +73,7 @@ extension WPEMetalSceneRenderer {
         sharedParallaxReadFans = [:]
         transformHostLocalTransformsByID = Self.transformHostLocalTransforms(in: document)
         layerAncestorLocalTransformsByID = Self.ancestorLocalTransforms(in: document)
+        lightingLocalTransformsByID = Self.lightingLocalTransforms(in: document)
         // Lights also appear as transform hosts in the parsed document. Give
         // their typed bindings one owner, rather than installing an engine twice.
         let lightObjectIDs = Set(document.lightObjects.map(\.id))
@@ -134,7 +135,7 @@ extension WPEMetalSceneRenderer {
         dynamicOriginAnimations = Dictionary(
             document.imageObjects.compactMap { object -> (String, WPESceneAnimatedValue)? in
                 object.originAnimation.map { (object.id, $0) }
-            } + nonLightHosts.compactMap { object -> (String, WPESceneAnimatedValue)? in
+            } + document.transformHostObjects.compactMap { object -> (String, WPESceneAnimatedValue)? in
                 guard object.id != cameraMotionPlayback?.definition.objectID else { return nil }
                 return object.originAnimation.map { (object.id, $0) }
             },
@@ -176,7 +177,8 @@ extension WPEMetalSceneRenderer {
             _ scripts: [(String, WPESceneTransformScript)],
             into instances: inout [String: WPEDynamicTransformScriptInstance],
             fans: inout [String: String],
-            label: String
+            label: String,
+            shape: WPEScriptValueShape = .vector3
         ) {
             for (objectID, script) in scripts {
                 if let key = WPESharedReadFanAnalysis.readKey(in: script.script) {
@@ -189,7 +191,7 @@ extension WPEMetalSceneRenderer {
                             script: script.script,
                             scriptProperties: script.scriptProperties,
                             seed: script.seed,
-                            valueShape: objectID == WPECameraMotionPlayback.zoomScriptKey ? .scalar : .vector3,
+                            valueShape: objectID == WPECameraMotionPlayback.zoomScriptKey ? .scalar : shape,
                             canvasSize: canvasSize,
                             screenSize: screenSize,
                             ownLayerName: layerNameByID[objectID],
@@ -229,7 +231,10 @@ extension WPEMetalSceneRenderer {
                 Logger.warning("Scene \(descriptor.workshopID) [ParticleRateScript] init failed for \(objectID): \(error)", category: .wpeRender)
             }
         }
-        install(parallaxScripts, into: &dynamicParallaxDepthScriptInstances, fans: &sharedParallaxReadFans, label: "ParallaxScript")
+        install(
+            parallaxScripts, into: &dynamicParallaxDepthScriptInstances, fans: &sharedParallaxReadFans,
+            label: "ParallaxScript", shape: .vector2
+        )
         debugStage(
             "transformScripts.fans",
             "origin=\(sharedOriginReadFans.count) scale=\(sharedScaleReadFans.count) angles=\(sharedAnglesReadFans.count) color=\(sharedColorReadFans.count)"
@@ -414,10 +419,30 @@ extension WPEMetalSceneRenderer {
             uniquingKeysWith: { first, _ in first }
         )
         result.merge(transformHostLocalTransforms(in: document)) { _, host in host }
-        for object in document.lightObjects {
+        // A light's host entry carries the script-resolved origin; its own localOrigin is the baked seed.
+        for object in document.lightObjects where result[object.id] == nil {
             result[object.id] = WPERenderObjectTransform(
                 origin: object.localOrigin, scale: object.localScale, angles: object.localAngles
             )
+        }
+        return result
+    }
+
+    /// A light may hang under any object, so text and particles join the drawn-layer ancestors here.
+    nonisolated static func lightingLocalTransforms(
+        in document: WPESceneDocument
+    ) -> [String: WPERenderObjectTransform] {
+        var result = ancestorLocalTransforms(in: document)
+        // Overrides the synthetic text image, whose origin is the anchored block centre, not the text origin.
+        for object in document.textObjects {
+            result[object.id] = WPERenderObjectTransform(
+                origin: object.localOrigin ?? object.origin, scale: object.localScale ?? object.scale,
+                angles: object.localAngles ?? object.angles
+            )
+        }
+        // A particle stores only its parse-time world transform; that is its local one only without a parent.
+        for object in document.particleObjects where result[object.id] == nil && document.objectParentByID[object.id] == nil {
+            result[object.id] = WPERenderObjectTransform(origin: object.origin, scale: object.scale, angles: object.angles)
         }
         return result
     }

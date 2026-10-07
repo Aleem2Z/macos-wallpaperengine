@@ -67,6 +67,21 @@ public enum DesignTokens {
             public static let schemes = Color(nsColor: .systemPurple)
         }
 
+        /// `SettingRow` icon tints, one per settings purpose.
+        public enum SettingsIcon {
+            public static let playback = Color.purple
+            public static let wallpaperNavigation = Color.blue
+            public static let mute = Color.pink
+            public static let mouseInteraction = Color.cyan
+            public static let wallpaperVisibility = Color.indigo
+            public static let reload = Color.teal
+            public static let openSettings = Color.orange
+            public static let inspectRegistrations = Color.indigo
+            public static let restartService = Color.orange
+            public static let automaticRecovery = Color.teal
+            public static let repairExtension = Color.indigo
+        }
+
         /// Deliberately softer than `Status.*`: paired with a thin ring, the always-busy
         /// gauges would read harshly otherwise.
         public enum Gauge {
@@ -262,6 +277,10 @@ public enum DesignTokens {
         public static let disabledContent: Double = 0.55
         /// Dimmed glyph in its off state; empty-slot strokes.
         public static let dimmedIcon: Double = 0.70
+        /// Chart segment while another segment is hovered.
+        public static let fadedSegment: Double = 0.35
+        /// Chart segment with nothing hovered or selected.
+        public static let restingSegment: Double = 0.80
     }
 
     /// Page-top status bars (storage breakdown, Workshop setup).
@@ -317,15 +336,6 @@ public enum DesignTokens {
         public static let verticalPadding: CGFloat = 6
     }
 
-    /// Without these floors macOS 26 `NavigationSplitView` squeezes the detail column
-    /// and drops the sidebar's upper sections out of view.
-    public enum LibraryPage {
-        /// Main-column floor (360) plus a fully expanded inspector (`Inspector.maxWidth`,
-        /// 480); `SettingsWindowLayoutTests` pins the relationship.
-        public static let minWidth: CGFloat = 840
-        public static let minHeight: CGFloat = 540
-    }
-
     /// Shared content padding for ContainerGroupBoxStyle and its action tiles.
     public enum GroupBox {
         public static let inset: CGFloat = Spacing.md
@@ -347,11 +357,15 @@ public enum DesignTokens {
     public enum Settings {
         public static let formHorizontalMargin: CGFloat = 18
         public static let formVerticalMargin: CGFloat = Spacing.md
+        /// Negative on purpose: the grouped form sets its first header ~21pt down; this centres it on the sidebar search field.
+        public static let formTopMargin: CGFloat = -13.5
         /// Widest the centered settings column grows in a wide window.
         public static let maxContentWidth: CGFloat = 1100
         /// Longer throw than `Inspector.sliderWidth` on purpose: this window has no 268pt
         /// panel floor, and these tracks are dragged for a value rather than nudged.
         public static let sliderWidth: CGFloat = 240
+        /// Every 2- and 3-segment settings picker: three equal segments plus 2pt padding fit Spanish "Desactivado" semibold.
+        public static let segmentedPickerWidth: CGFloat = 250
     }
 
     public enum Card {

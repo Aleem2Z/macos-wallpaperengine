@@ -421,6 +421,17 @@ struct SavedLibraryModelTests {
         #expect(model.visibleItems.isEmpty, "the first character of a type's name matched that type's rows")
     }
 
+    #if !LITE_BUILD
+    @Test("A search finds a row by its translated name")
+    func searchFindsTranslatedName() {
+        let title = "夕阳下的海边小镇"
+        WPEPropertyLabelTranslator.wallpaperNames.store([(title, "Seaside town at sunset")])
+        let model = SavedLibraryModel(inputs: inputs([bookmark(title), bookmark("Alpha")]))
+        model.query = "seaside"
+        #expect(model.visibleItems.map(\.title) == [title], "the row is not found by its translated name")
+    }
+    #endif
+
     @Test func aerialsStatusMirrorsInputsOnRefresh() {
         let scanning = SavedLibraryModel.AerialsState(
             assets: [], isAuthorized: false, lastScanError: "scan failed", isScanning: true
@@ -643,6 +654,47 @@ struct SavedLibraryModelTests {
         }
         _ = SavedLibraryModel(inputs: source)
         #expect(resolves <= 2, "the refresh resolved each aerial's bookmark to compare it with the displays")
+    }
+
+    @Test("Aerial display matching keeps direct and resolved matches in display order, excluding unresolved videos")
+    func aerialDisplayMatchingPreservesOrderAndRejectsMissingPaths() {
+        let asset = aerial()
+        let previous = Data("previous scan".utf8)
+        let missing = Data("unresolved video".utf8)
+        var source = inputs(aerials: [asset, aerial("other")])
+        source.activeWallpapers = { [
+            (42, .video(bookmarkData: previous)),
+            (7, .video(bookmarkData: asset.bookmarkData)),
+            (9, .video(bookmarkData: missing)),
+            (12, .video(bookmarkData: previous)),
+        ] }
+        source.filePath = { $0 == previous ? "/sky.mov" : nil }
+        let snapshot = SavedLibraryModel.catalogSnapshot(inputs: source)
+        #expect(snapshot.items[0].onDisplays == [42, 7, 12])
+        #expect(snapshot.items[1].onDisplays.isEmpty)
+    }
+
+    @Test("An unresolved match is reused until refresh, then the newly available file can match")
+    func missingAerialPathIsCachedUntilRefresh() {
+        let oldBookmark = Data("old scan".utf8)
+        var source = inputs(aerials: [aerial(), aerial("other")])
+        var resolves = 0
+        var available = false
+        source.filePath = { _ in
+            resolves += 1
+            return available ? "/sky.mov" : nil
+        }
+        let model = SavedLibraryModel(inputs: source)
+        let content = WallpaperContent.video(bookmarkData: oldBookmark)
+        #expect(!model.aerial(aerial(), matches: content))
+        #expect(!model.aerial(aerial("other"), matches: content))
+        #expect(resolves == 1)
+        available = true
+        #expect(!model.aerial(aerial(), matches: content))
+        #expect(resolves == 1)
+        model.refresh()
+        #expect(model.aerial(aerial(), matches: content))
+        #expect(resolves == 2)
     }
 
     @Test("A bookmark that did not resolve is resolved again by the next refresh")

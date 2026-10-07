@@ -82,7 +82,7 @@ public struct SecurityScopedBookmarkResolver: Sendable {
                 return Resolution(url: url, isStale: isStale, isSecurityScoped: true)
             } catch {
                 let scopedError = error as NSError
-                Logger.warning(
+                Logger.info(
                     "[bookmark] scoped resolve refused (\(scopedError.domain) \(scopedError.code)); falling back to unscoped resolve",
                     category: .fileAccess
                 )
@@ -90,6 +90,18 @@ public struct SecurityScopedBookmarkResolver: Sendable {
                 return Resolution(url: url, isStale: isStale, isSecurityScoped: false)
             }
         }
+        self.resolveDetailed = resolveDetailed
+        resolveData = { data in
+            let resolution = try resolveDetailed(data)
+            return (resolution.url, resolution.isStale)
+        }
+        self.refreshData = refreshData
+    }
+
+    private init(
+        resolveDetailed: @escaping @Sendable (Data) throws -> Resolution,
+        refreshData: @escaping @Sendable (URL) throws -> Data
+    ) {
         self.resolveDetailed = resolveDetailed
         resolveData = { data in
             let resolution = try resolveDetailed(data)
@@ -110,9 +122,9 @@ public struct SecurityScopedBookmarkResolver: Sendable {
             let resolution = try resolveDetailed(data)
             (url, isStale, isSecurityScoped) = (resolution.url, resolution.isStale, resolution.isSecurityScoped)
         } catch {
-            Logger.warning(
+            Logger.repeatedWarning(
                 "[bookmark/\(target.label)] resolve failed: \(error.localizedDescription)",
-                category: .fileAccess
+                source: .bookmarkResolution, category: .fileAccess
             )
             return .failure(.resolutionFailed(error.localizedDescription))
         }
@@ -132,9 +144,9 @@ public struct SecurityScopedBookmarkResolver: Sendable {
                     category: .fileAccess
                 )
             } catch {
-                Logger.warning(
+                Logger.repeatedWarning(
                     "[bookmark/\(target.label)] stale and refresh failed: \(error.localizedDescription) — current URL still usable but re-grant may be needed next launch",
-                    category: .fileAccess
+                    source: .bookmarkResolution, category: .fileAccess
                 )
             }
         }
@@ -190,8 +202,32 @@ extension SecurityScopedBookmarkResolver {
             )
         }
     )
+}
 
-    public static var shared: SecurityScopedBookmarkResolver { .live }
+public extension SecurityScopedBookmarkResolver {
+    /// Plain resolve and refresh, every URL reported unscoped: never asks ScopedBookmarkAgent.
+    private static let unscoped = SecurityScopedBookmarkResolver(
+        resolveDetailed: { data in
+            var isStale = false
+            let url = try URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &isStale)
+            return Resolution(url: url, isStale: isStale, isSecurityScoped: false)
+        },
+        refreshData: { url in
+            try url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+        }
+    )
+
+    /// False in the XCTest host, whose many real bookmarks would exhaust the per-user ScopedBookmarkAgent.
+    static let usesSecurityScope = NSClassFromString("XCTestCase") == nil
+
+    /// `options` without the scope flags when `usesSecurityScope` is false; every scoped bookmark creation goes through this.
+    static func creationOptions(_ options: URL.BookmarkCreationOptions) -> URL.BookmarkCreationOptions {
+        usesSecurityScope ? options : options.subtracting([.withSecurityScope, .securityScopeAllowOnlyReadAccess])
+    }
+
+    static var shared: SecurityScopedBookmarkResolver {
+        usesSecurityScope ? .live : .unscoped
+    }
 }
 
 // MARK: - Typed targets shared by all SKUs

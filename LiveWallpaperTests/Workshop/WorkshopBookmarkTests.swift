@@ -1,7 +1,10 @@
 #if !LITE_BUILD
+import AppKit
 import Foundation
 @testable import LiveWallpaper
 import LiveWallpaperCore
+import Observation
+import SwiftUI
 import Testing
 
 @Suite("Workshop bookmarks")
@@ -130,6 +133,53 @@ struct WorkshopBookmarkTests {
         #expect(items.map(\.id) == [1, 2])
     }
 
+    @Test("A hosted Likes grid follows loaded metadata and like actions without rebuilding its host")
+    func hostedLikesGridRefreshesAfterMetadataAndLikeChanges() async throws {
+        let (_, workshop, suite) = try Self.stores("hostedLikes")
+        defer { suite.discard() }
+        for id: UInt64 in [1, 2] {
+            workshop.add(WorkshopBookmark(
+                id: id, rawTitle: "Rain", previewImageURL: nil, tags: [],
+                createdAt: Date(timeIntervalSince1970: Double(id) * 100)
+            ))
+        }
+        let input = WorkshopLikesRefreshInput()
+        input.browseItems = [Self.queryItem(2, rawTitle: "Loaded first"), Self.queryItem(2, rawTitle: "Loaded duplicate")]
+        let host = NSHostingView(rootView: WorkshopLikesRefreshGrid(store: workshop, input: input)
+            .frame(width: 640, height: 260))
+        let window = ParkedTestWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 640, height: 260),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.parkOffScreen()
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+            window.close()
+        }
+        @MainActor func rendered(_ ids: [UInt64], titles: [String?]) async -> Bool {
+            let deadline = ContinuousClock.now + .seconds(2)
+            while ContinuousClock.now < deadline {
+                host.layoutSubtreeIfNeeded()
+                if input.renderedItems.map(\.id) == ids, input.renderedItems.map(\.rawTitle) == titles {
+                    return true
+                }
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            return false
+        }
+        #expect(await rendered([2, 1], titles: ["Loaded first", "Rain"]))
+
+        input.browseItems = [Self.queryItem(1, rawTitle: "New remote title")]
+        #expect(await rendered([2, 1], titles: ["Rain", "New remote title"]))
+        WorkshopBookmarkActions.toggle(Self.queryItem(2), workshopStore: workshop)
+        #expect(await rendered([1], titles: ["New remote title"]))
+        WorkshopBookmarkActions.toggle(Self.queryItem(3, rawTitle: "New like"), workshopStore: workshop)
+        #expect(await rendered([3, 1], titles: ["New like", "New remote title"]))
+    }
+
     @Test("A card wired the way Browse wires it saves its item on the first click and removes it on the second")
     func browseCardTogglesTheBookmark() throws {
         let (_, workshop, suite) = try Self.stores("card")
@@ -149,6 +199,26 @@ struct WorkshopBookmarkTests {
         #expect(!WorkshopBookmarkActions.bookmarkedIDs(workshopStore: workshop).contains(item.id))
     }
 
+    @Test("Deleting one library copy keeps the saved records another copy of the same Workshop ID still owns")
+    func deletingOneCopyKeepsSharedRecords() throws {
+        let (local, _, suite) = try Self.stores("sharedCopy")
+        defer { suite.discard() }
+        let marks = LibraryBookmarkStore(defaults: suite.defaults)
+        let bookmark = Self.addLocal("424242", to: local)
+        marks.add("workshop:424242")
+        marks.add("bookmark:\(bookmark.id)")
+        let remaining = WPEHistoryEntry(origin: Self.origin("424242"), importedAt: Date(timeIntervalSince1970: 1_700_000_000))
+
+        WorkshopSavedRecords.remove(workshopID: "424242", bookmarks: local, libraryBookmarks: marks, history: { [remaining] })
+        #expect(local.containsWPEBookmark(workshopID: "424242"), "deleting one copy removed the saved entries the other copy owns")
+        #expect(marks.contains("workshop:424242"), "deleting one copy removed the other copy's library mark")
+        #expect(marks.contains("bookmark:\(bookmark.id)"), "deleting one copy removed the saved entry's library mark")
+
+        WorkshopSavedRecords.remove(workshopID: "424242", bookmarks: local, libraryBookmarks: marks, history: { [] })
+        #expect(!local.containsWPEBookmark(workshopID: "424242"), "deleting the last copy left its saved entries behind")
+        #expect(!marks.contains("workshop:424242"), "deleting the last copy left its library mark behind")
+    }
+
     // MARK: - Wiring
 
     @Test("Deleting an installed item leaves its like alone and clears only the library's own marks")
@@ -166,5 +236,30 @@ struct WorkshopBookmarkTests {
         #expect(records.contains(#"libraryBookmarks.remove("bookmark:\("#), "a deleted item's saved variants keep their library marks")
     }
 
+}
+
+@MainActor @Observable
+private final class WorkshopLikesRefreshInput {
+    var browseItems: [WorkshopQueryItem] = []
+    @ObservationIgnored var renderedItems: [WorkshopQueryItem] = []
+}
+
+private struct WorkshopLikesRefreshGrid: View {
+    let store: WorkshopBookmarkStore
+    let input: WorkshopLikesRefreshInput
+
+    var body: some View {
+        let items = WorkshopBookmarkActions.likedItems(browseItems: input.browseItems, workshopStore: store)
+        LibraryGalleryGrid(size: .small, aspect: .square, columnWidth: DesignTokens.LibraryGrid.workshopBrowseColumnWidth) {
+            ForEach(items) { item in
+                BrowseCard(
+                    item: item, cardPreferences: GalleryCardPreferences(), reduceMotion: true,
+                    isBookmarked: true, onBookmark: { WorkshopBookmarkActions.toggle(item, workshopStore: store) }
+                )
+                .equatable()
+            }
+        }
+        .onChange(of: items, initial: true) { _, shown in input.renderedItems = shown }
+    }
 }
 #endif

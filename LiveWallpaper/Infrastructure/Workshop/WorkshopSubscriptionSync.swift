@@ -21,21 +21,28 @@ final class WorkshopSubscriptionSync {
     /// than only describe.
     private(set) var requiresSignIn = false
     var selection: Set<UInt64> = []
+    /// Ids this sync sent to download, kept so their rows and cancel survive a check that no longer lists them.
+    private var submitted: [UInt64] = []
 
     @ObservationIgnored private let metadataService: SteamWorkshopMetadataService
     @ObservationIgnored private let downloads: WorkshopDownloadCoordinator
     @ObservationIgnored private let queue: WorkshopDownloadQueue
+    @ObservationIgnored private let listSubscriptions: @MainActor (String) async -> SteamSubscribedItemsResult?
 
     private static let metadataFetchBatchSize = 50
 
     init(
         metadataService: SteamWorkshopMetadataService = SteamWorkshopMetadataService(),
         downloads: WorkshopDownloadCoordinator = .shared,
-        queue: WorkshopDownloadQueue = .shared
+        queue: WorkshopDownloadQueue = .shared,
+        listSubscriptions: @escaping @MainActor (String) async -> SteamSubscribedItemsResult? = {
+            await SteamConnectorClient.listSubscribedWorkshopItems(accountName: $0)
+        }
     ) {
         self.metadataService = metadataService
         self.downloads = downloads
         self.queue = queue
+        self.listSubscriptions = listSubscriptions
     }
 
     func refresh(using doctor: SteamCMDDoctorService) async {
@@ -49,15 +56,18 @@ final class WorkshopSubscriptionSync {
         phase = .checking
         titles = [:]
         requiresSignIn = false
+        submitted.removeAll { !isActive($0) }
 
-        guard let installed = installedWorkshopIDs(using: doctor) else {
+        // Without the library grant every subscription would read as missing.
+        guard let access = try? doctor.beginWorkdirAccess() else {
             fail(String(
                 localized: "Authorize your Steam library folder before checking your subscriptions.",
                 bundle: .appLanguage, comment: "Subscription sync error when the Steam library folder is not authorized."
             ))
             return
         }
-        guard let result = await SteamConnectorClient.listSubscribedWorkshopItems(accountName: account) else {
+        defer { access.end() }
+        guard let result = await listSubscriptions(account) else {
             fail(String(
                 localized: "Loomscreen's Steam connector did not respond.",
                 bundle: .appLanguage, comment: "Subscription sync error when the XPC connector could not be reached."
@@ -67,7 +77,18 @@ final class WorkshopSubscriptionSync {
 
         switch result.outcome {
         case .listed:
+            // Read after the listing: the SteamCMD run behind it can install items.
+            guard let installed = installedWorkshopIDs(in: access.url) else {
+                fail(String(
+                    localized: "The Workshop folder in your Steam library could not be read. Authorize your Steam library folder again, then check your subscriptions.",
+                    bundle: .appLanguage, comment: "Subscription sync error when the Workshop content folder exists but cannot be read."
+                ))
+                return
+            }
             let missing = result.workshopIDs.compactMap(UInt64.init).filter { !installed.contains($0) }
+            for itemID in missing where !isActive(itemID) {
+                downloads.forgetSettledPhase(itemID)
+            }
             phase = .ready(missing: missing)
             selection = Set(missing)
             await loadTitles(for: missing)
@@ -98,25 +119,30 @@ final class WorkshopSubscriptionSync {
 
     /// Selected missing items that a press of Download would still send.
     func downloadableSelection() -> [UInt64] {
-        guard case let .ready(missing) = phase else { return [] }
-        return missing.filter { itemID in
-            switch downloads.phase(for: itemID) {
-            case .succeeded, .succeededAsPreset: false
-            default: selection.contains(itemID) && !queue.isQueued(itemID) && !downloads.isBusy(itemID)
-            }
-        }
+        missing.filter { selection.contains($0) && !isActive($0) }
     }
 
-    func downloadSelected(using doctor: SteamCMDDoctorService) {
+    /// The latest check's missing items, then submitted ones still downloading that it did not list.
+    var rows: [UInt64] {
+        let listed = missing
+        return listed + submitted.filter { !listed.contains($0) && isActive($0) }
+    }
+
+    var hasActiveDownloads: Bool {
+        rows.contains(where: isActive)
+    }
+
+    func downloadSelected(using doctor: any WorkshopItemDownloading) {
+        let itemIDs = downloadableSelection()
+        submitted += itemIDs.filter { !submitted.contains($0) }
         // download() approves only a local copy, so a Steam holder passed as `replacing:` still refuses.
-        queue.enqueue(downloadableSelection().map {
+        queue.enqueue(itemIDs.map {
             WorkshopDownloadQueue.Request(itemID: $0, title: title(for: $0), replacesLocalCopy: true, doctor: doctor)
         })
     }
 
     func cancelDownloads() {
-        guard case let .ready(missing) = phase else { return }
-        for itemID in missing {
+        for itemID in rows {
             queue.cancel(itemID)
         }
     }
@@ -127,25 +153,35 @@ final class WorkshopSubscriptionSync {
 
     // MARK: - Helpers
 
+    private var missing: [UInt64] {
+        if case let .ready(missing) = phase {
+            missing
+        } else {
+            []
+        }
+    }
+
+    private func isActive(_ itemID: UInt64) -> Bool {
+        queue.isQueued(itemID) || downloads.isBusy(itemID)
+    }
+
     private func fail(_ reason: String, requiresSignIn: Bool = false) {
         self.requiresSignIn = requiresSignIn
         phase = .failed(reason)
     }
 
-    /// nil means the library grant could not be resolved — do not report every subscription as missing.
-    private func installedWorkshopIDs(using doctor: SteamCMDDoctorService) -> Set<UInt64>? {
-        guard let workdir = try? doctor.resolveWorkdirURL() else { return nil }
-        let scope = workdir.startAccessingSecurityScopedResource()
-        defer {
-            if scope {
-                workdir.stopAccessingSecurityScopedResource()
-            }
+    /// nil = the content folder exists but could not be read, so nothing is known about what is installed.
+    /// `steamRoot` must be read while its `WorkdirAccess` is held.
+    private func installedWorkshopIDs(in steamRoot: URL) -> Set<UInt64>? {
+        let content = SteamLibraryPaths.workshopContentRoot(steamRoot: steamRoot)
+        do {
+            let entries = try FileManager.default.contentsOfDirectory(atPath: content.path(percentEncoded: false))
+            return Set(entries.compactMap(UInt64.init))
+        } catch CocoaError.fileReadNoSuchFile {
+            return []
+        } catch {
+            return nil
         }
-        let content = SteamLibraryPaths.workshopContentRoot(steamRoot: workdir)
-        let entries = (try? FileManager.default.contentsOfDirectory(
-            atPath: content.path(percentEncoded: false)
-        )) ?? []
-        return Set(entries.compactMap(UInt64.init))
     }
 
     /// Titles from the keyless batch endpoint in ≤50 chunks. Failures are silent: an id is a usable label.

@@ -122,6 +122,11 @@ public struct CoalescedSlider<Readout: View>: View {
                 .modifier(SliderSizing(sizing: sizing))
 
             readout(value)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                // A grouped Form can give the readout zero width after sizing the
+                // track. Keep its value visible instead of wrapping digits vertically.
+                .fixedSize(horizontal: true, vertical: false)
         }
         .onChange(of: owner) { _, _ in
             // The row now belongs to something else; a pending commit was
@@ -148,6 +153,7 @@ public struct CoalescedSlider<Readout: View>: View {
         Binding(
             get: { value },
             set: { next in
+                guard next != value else { return }
                 draggingValue = next
                 scheduleCommit(next)
             }
@@ -159,7 +165,7 @@ public struct CoalescedSlider<Readout: View>: View {
         let final = draggingValue ?? committedValue
         draggingValue = nil
         cancelPendingCommit()
-        guard final != lastWrittenValue else {
+        guard final != (lastWrittenValue ?? committedValue) else {
             lastWrittenValue = nil
             return
         }
@@ -173,6 +179,7 @@ public struct CoalescedSlider<Readout: View>: View {
             try? await Task.sleep(for: quietWindow)
             guard !Task.isCancelled else { return }
             commitTask = nil
+            guard next != (lastWrittenValue ?? committedValue) else { return }
             lastWrittenValue = next
             write(next)
         }

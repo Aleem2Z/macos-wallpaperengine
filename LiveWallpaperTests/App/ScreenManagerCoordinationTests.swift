@@ -8,6 +8,34 @@ import WebKit
 @Suite("ScreenManager ↔ PlaybackCoordinator coordination")
 @MainActor
 struct ScreenManagerCoordinationTests {
+    @Test("Display refresh preserves a live session unless a reload is explicitly requested", arguments: [false, true])
+    func displayRefreshSessionLifetime(preserve: Bool) throws {
+        let display = try #require(NSScreen.screens.first)
+        let screen = Screen(nsScreen: display)
+        let refreshed = Screen(nsScreen: display)
+        let registry = FakeDisplayRegistry(screens: [screen])
+        let manager = ScreenManager(startupOptions: ScreenManagerStartupOptions(
+            restoreSavedWallpapers: false, startAutomation: false,
+            powerMonitor: FakePowerMonitor(), fullScreenDetector: FakeFullScreenDetector(),
+            playableVideoLoader: FakePlayableVideoLoader(), displayRegistry: registry,
+            featureCatalog: FeatureCatalog(capabilities: .pro)
+        ))
+        defer { manager.tearDownForTermination() }
+        let session = TestRuntimeSession(wallpaperType: .html)
+        screen.installRuntimeSession(session)
+        manager.wallpapersGloballyEnabled = true
+        registry.screens = [refreshed]
+
+        manager.refreshScreens(preserveRuntimeSessions: preserve)
+
+        #expect(manager.screens.first === refreshed)
+        #expect((refreshed.runtimeSession != nil) == preserve)
+        #expect(session.cleanupCount == (preserve ? 0 : 1))
+        if preserve {
+            #expect((refreshed.runtimeSession as AnyObject?) === session)
+        }
+    }
+
     @Test("A prepared wallpaper follows a refreshed Screen, but not removal or a newer selection",
           arguments: [false, true], ["refresh", "disconnect", "new-selection"])
     func preparedWallpaperFollowsDisplayRefresh(hasOutgoing: Bool, change: String) async throws {
@@ -60,6 +88,50 @@ struct ScreenManagerCoordinationTests {
             #expect(completed == .cancelled)
             #expect(candidate.cleanupCount == 1)
         }
+    }
+
+    @Test("A preparing attempt follows a same-display refresh to the replacement Screen", arguments: ["commit", "cancel"])
+    func preparingAttemptFollowsDisplayRefresh(outcome: String) async throws {
+        let display = try #require(NSScreen.screens.first)
+        let screen = Screen(nsScreen: display)
+        let refreshed = Screen(nsScreen: display)
+        let registry = FakeDisplayRegistry(screens: [screen])
+        let manager = ScreenManager(startupOptions: ScreenManagerStartupOptions(
+            restoreSavedWallpapers: false, startAutomation: false,
+            powerMonitor: FakePowerMonitor(), fullScreenDetector: FakeFullScreenDetector(),
+            playableVideoLoader: FakePlayableVideoLoader(), displayRegistry: registry,
+            featureCatalog: FeatureCatalog(capabilities: .pro)
+        ))
+        defer { manager.tearDownForTermination() }
+        manager.wallpapersGloballyEnabled = true
+        let attemptID = manager.wallpaperLoads.begin(for: screen, title: "Scene")
+        manager.wallpaperLoads.update(attemptID, for: screen) { $0.phase = .preparing }
+        let candidate = TestRuntimeSession(wallpaperType: .html)
+        var inFlightOnRefreshed: UUID?
+        var orphanedByCancel = false
+        candidate.prepareAction = {
+            registry.screens = [refreshed]
+            manager.refreshScreens()
+            inFlightOnRefreshed = manager.wallpaperLoads.attempt(for: refreshed)?.id
+            if outcome == "cancel" {
+                manager.beginExplicitWallpaperSelection(for: refreshed)
+                orphanedByCancel = !manager.wallpaperLoads.attempts.isEmpty
+            }
+            return .ready
+        }
+        let generation = manager.bumpTransition(for: screen.id)
+        let configuration = ScreenConfiguration(screenID: screen.id, wallpaper: .html(source: .inline("new"), config: .default))
+        let work = manager.beginPreparedAmbientSession(
+            candidate, for: screen, replacing: nil, generation: generation, attemptID: attemptID,
+            proposedConfiguration: configuration,
+            expectedConfigurationRevision: manager.configurationStore.revision(for: screen.id),
+            timeout: .seconds(2), beforeCommit: { true }, afterCommit: {}
+        )
+        await work.task?.value
+        #expect(inFlightOnRefreshed == attemptID)
+        #expect(!orphanedByCancel)
+        #expect(manager.wallpaperLoads.attempts.isEmpty)
+        #expect(((refreshed.runtimeSession as AnyObject?) === candidate) == (outcome == "commit"))
     }
 
     @Test("Wallpaper rendering activity allows idle system sleep")
@@ -509,8 +581,6 @@ struct ScreenManagerCoordinationTests {
         #expect(applied.particleEffect == .rain)
         #expect(applied.effectConfig.blurRadius == 4)
         #expect(applied.effectConfig.particleDensity == 2)
-        #expect(player.currentParticleConfiguration.effect == .rain)
-        #expect(player.currentParticleConfiguration.density == 2)
     }
 
     @Test("Deferred asset configuration rejects a changed package entry")
